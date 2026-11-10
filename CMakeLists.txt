@@ -35,10 +35,19 @@ add_library(ptp_core STATIC
     src/core/Story.cpp
     src/core/TextFile.cpp
     src/core/Utf8.cpp
+    src/terminal/TerminalWorld.cpp
 )
 target_include_directories(ptp_core PUBLIC src)
 target_link_libraries(ptp_core PUBLIC ptp_options)
 target_compile_definitions(ptp_core PRIVATE PTP_SOURCE_ASSETS="${CMAKE_SOURCE_DIR}/assets")
+
+# ------------------------------------------------------------------ терминал (стадия 1)
+add_library(ptp_terminal STATIC
+    src/terminal/Console.cpp
+    src/terminal/Screen.cpp
+    src/terminal/TerminalStage.cpp
+)
+target_link_libraries(ptp_terminal PUBLIC ptp_core)
 
 # ------------------------------------------------------------------ тесты
 if(PTP_BUILD_TESTS)
@@ -48,6 +57,7 @@ if(PTP_BUILD_TESTS)
         tests/test_dialogue.cpp
         tests/test_progress.cpp
         tests/test_story.cpp
+        tests/test_terminal_world.cpp
         tests/test_utf8.cpp
     )
     target_include_directories(ptp_tests PRIVATE third_party/doctest)
