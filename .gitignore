@@ -1,0 +1,17 @@
+# Сборка
+build*/
+cmake-build-*/
+out/
+
+# IDE
+.idea/
+.vs/
+.vscode/
+*.user
+
+# Сохранение игры
+save.txt
+
+# Системный мусор
+.DS_Store
+Thumbs.db
