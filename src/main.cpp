@@ -20,6 +20,7 @@
 #include "gfx/Gfx.hpp"
 #include "gfx/PlatformerStage.hpp"
 #include "gfx/crude/CrudeRenderer.hpp"
+#include "gfx/pretty/PrettyRenderer.hpp"
 #include "terminal/Console.hpp"
 #include "terminal/TerminalStage.hpp"
 
@@ -147,7 +148,7 @@ private:
             switch (progress_.stage) {
                 case StageId::Terminal:  // сюда не попадаем, но компилятор любит полноту
                 case StageId::Crude: running = runCrude(ctx); break;
-                case StageId::Pretty:  // красивое 2D — следующий шаг
+                case StageId::Pretty: running = runPretty(ctx); break;
                 case StageId::Finale:
                     running = false;  // финал — следующий шаг
                     break;
@@ -173,6 +174,21 @@ private:
         }
         advanceTo(StageId::Pretty);
         growWindow({GetScreenWidth(), GetScreenHeight()}, kPrettyWindow);
+        return true;
+    }
+
+    bool runPretty(gfx::GameContext& ctx) {
+        SetWindowTitle("Из пикселя в люди");
+        gfx::PrettyRenderer renderer(ctx);
+        gfx::StageSetup setup;
+        setup.levels = {"pretty_1.txt", "pretty_2.txt"};
+        setup.physics = platformer::PhysicsConfig::polished();
+        setup.sound = gfx::SfxStyle::Pretty;
+        if (gfx::runPlatformerStage(ctx, setup, renderer, progress_) != gfx::StageResult::Completed) {
+            save();
+            return false;
+        }
+        advanceTo(StageId::Finale);
         return true;
     }
 
