@@ -20,6 +20,7 @@
 #include "gfx/Gfx.hpp"
 #include "gfx/PlatformerStage.hpp"
 #include "gfx/crude/CrudeRenderer.hpp"
+#include "gfx/finale/FinaleStage.hpp"
 #include "gfx/pretty/PrettyRenderer.hpp"
 #include "terminal/Console.hpp"
 #include "terminal/TerminalStage.hpp"
@@ -149,9 +150,16 @@ private:
                 case StageId::Terminal:  // сюда не попадаем, но компилятор любит полноту
                 case StageId::Crude: running = runCrude(ctx); break;
                 case StageId::Pretty: running = runPretty(ctx); break;
-                case StageId::Finale:
-                    running = false;  // финал — следующий шаг
+                case StageId::Finale: {
+                    const auto result = gfx::runFinale(ctx, progress_);
+                    if (result == gfx::FinaleResult::Finished) {
+                        // Игра пройдена: следующий запуск снова начнётся с одинокого пикселя.
+                        std::error_code ec;
+                        fs::remove(savePath_, ec);
+                    }
+                    running = false;
                     break;
+                }
             }
         }
 

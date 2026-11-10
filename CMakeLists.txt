@@ -74,6 +74,7 @@ if(PTP_BUILD_GAME)
         src/gfx/crude/CrudeRenderer.cpp
         src/gfx/pretty/Particles.cpp
         src/gfx/pretty/PrettyRenderer.cpp
+        src/gfx/finale/FinaleStage.cpp
     )
     target_link_libraries(pixel_to_people PRIVATE ptp_terminal raylib)
     target_compile_definitions(pixel_to_people PRIVATE PTP_SOURCE_ASSETS="${CMAKE_SOURCE_DIR}/assets")
