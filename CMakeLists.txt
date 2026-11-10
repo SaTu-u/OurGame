@@ -52,6 +52,44 @@ add_library(ptp_terminal STATIC
 )
 target_link_libraries(ptp_terminal PUBLIC ptp_core)
 
+# ------------------------------------------------------------------ игра
+if(PTP_BUILD_GAME)
+    include(FetchContent)
+    # raylib скачивается при первой сборке — ничего ставить руками не нужно.
+    set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+    set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(BUILD_GAMES OFF CACHE BOOL "" FORCE)
+    set(CUSTOMIZE_BUILD OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(raylib
+        GIT_REPOSITORY https://github.com/raysan5/raylib.git
+        GIT_TAG 5.5
+        GIT_SHALLOW TRUE)
+    FetchContent_MakeAvailable(raylib)
+
+    add_executable(pixel_to_people
+        src/main.cpp
+        src/gfx/Audio.cpp
+        src/gfx/Fonts.cpp
+        src/gfx/PlatformerStage.cpp
+        src/gfx/crude/CrudeRenderer.cpp
+    )
+    target_link_libraries(pixel_to_people PRIVATE ptp_terminal raylib)
+    target_compile_definitions(pixel_to_people PRIVATE PTP_SOURCE_ASSETS="${CMAKE_SOURCE_DIR}/assets")
+
+    # Папка assets копируется рядом с exe — так игру можно просто заархивировать и отдать.
+    add_custom_command(TARGET pixel_to_people POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_SOURCE_DIR}/assets $<TARGET_FILE_DIR:pixel_to_people>/assets)
+
+    if(APPLE)
+        target_link_libraries(pixel_to_people PRIVATE "-framework IOKit" "-framework Cocoa" "-framework OpenGL")
+    endif()
+    if(MINGW)
+        # exe без зависимостей от DLL MinGW — запускается двойным щелчком на любом Windows.
+        target_link_options(pixel_to_people PRIVATE -static -static-libgcc -static-libstdc++)
+    endif()
+endif()
+
 # ------------------------------------------------------------------ тесты
 if(PTP_BUILD_TESTS)
     enable_testing()
