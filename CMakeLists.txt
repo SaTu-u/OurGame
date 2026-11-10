@@ -36,6 +36,9 @@ add_library(ptp_core STATIC
     src/core/TextFile.cpp
     src/core/Utf8.cpp
     src/terminal/TerminalWorld.cpp
+    src/platformer/Physics.cpp
+    src/platformer/TileMap.cpp
+    src/platformer/World.cpp
 )
 target_include_directories(ptp_core PUBLIC src)
 target_link_libraries(ptp_core PUBLIC ptp_options)
@@ -55,10 +58,14 @@ if(PTP_BUILD_TESTS)
     add_executable(ptp_tests
         tests/main.cpp
         tests/test_dialogue.cpp
+        tests/test_levels_playable.cpp
+        tests/test_physics.cpp
         tests/test_progress.cpp
         tests/test_story.cpp
         tests/test_terminal_world.cpp
+        tests/test_tilemap.cpp
         tests/test_utf8.cpp
+        tests/test_world.cpp
     )
     target_include_directories(ptp_tests PRIVATE third_party/doctest)
     target_link_libraries(ptp_tests PRIVATE ptp_core)
