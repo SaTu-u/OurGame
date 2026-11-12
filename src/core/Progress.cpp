@@ -68,6 +68,7 @@ std::string Progress::serialize() const {
     out << "dash=" << (dash ? 1 : 0) << '\n';
     out << "bits=" << bits << '\n';
     out << "pixels=" << pixels << '\n';
+    out << "shards=" << shards << '\n';
     out << "deaths=" << deaths << '\n';
     out << "play_ms=" << static_cast<long long>(playSeconds * 1000.0) << '\n';
     return out.str();
@@ -95,6 +96,8 @@ Progress Progress::deserialize(std::string_view text) {
             parseNumber(value, p.bits);
         } else if (key == "pixels") {
             parseNumber(value, p.pixels);
+        } else if (key == "shards") {
+            parseNumber(value, p.shards);
         } else if (key == "deaths") {
             parseNumber(value, p.deaths);
         } else if (key == "play_ms") {

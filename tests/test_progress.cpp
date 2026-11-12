@@ -12,6 +12,7 @@ TEST_CASE("progress: сохранение и загрузка дают то же
     p.doubleJump = true;
     p.bits = 24;
     p.pixels = 17;
+    p.shards = 4;
     p.deaths = 5;
     p.playSeconds = 123.5;
     CHECK(Progress::deserialize(p.serialize()) == p);
@@ -39,4 +40,13 @@ TEST_CASE("options: аргументы командной строки") {
 
     const Options bad = parseOptions({"--stage", "--what"});
     CHECK_FALSE(bad.errors.empty());
+
+    const Options demo = parseOptions({"--stage", "crude", "--level", "3", "--demo"});
+    CHECK(demo.errors.empty());
+    CHECK(demo.startStage == StageId::Crude);
+    CHECK(demo.startLevel == 2);  // в командной строке уровни считаются с единицы
+    CHECK(demo.demo);
+
+    CHECK_FALSE(parseOptions({"--level", "2"}).errors.empty());  // без --stage нельзя
+    CHECK_FALSE(parseOptions({"--stage", "2", "--level", "0"}).errors.empty());
 }

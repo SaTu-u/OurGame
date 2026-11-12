@@ -24,11 +24,12 @@ std::optional<StageId> parseStage(std::string_view text);
 
 struct Progress {
     StageId stage = StageId::Terminal;
-    int level = 0;  ///< номер уровня внутри стадии
-    bool doubleJump = false;
-    bool dash = false;
+    int level = 0;  ///< номер уровня (или сектора терминала) внутри стадии
+    bool doubleJump = false;  ///< научила Алина
+    bool dash = false;        ///< научил Егор
     int bits = 0;    ///< биты, собранные в терминале
     int pixels = 0;  ///< пиксели, собранные в 2D
+    int shards = 0;  ///< найденные осколки памяти
     int deaths = 0;
     double playSeconds = 0.0;
 
