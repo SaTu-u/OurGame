@@ -22,8 +22,8 @@ struct Input {
 };
 
 struct Abilities {
-    bool doubleJump = false;  ///< от Глюка
-    bool dash = false;        ///< от Шейдера
+    bool doubleJump = false;  ///< этому учит Алина
+    bool dash = false;        ///< этому учит Егор
 };
 
 enum class EventType {
@@ -31,6 +31,7 @@ enum class EventType {
     AirJump,
     Land,
     Dash,
+    Spring,
     Pickup,
     Stomp,
     DashKill,
@@ -38,14 +39,10 @@ enum class EventType {
     Death,
     Respawn,
     Checkpoint,
-    BuddyMet,  ///< value — номер кента (1 — Глюк, 2 — Шейдер)
+    BuddyMet,    ///< value — номер друга (1 — Алина, 2 — Егор)
+    StoryPoint,  ///< value — номер сюжетной точки «!» на уровне (слева направо, с нуля)
+    Shard,       ///< value — номер осколка памяти «?»
     LevelComplete,
-    BossAwake,
-    BossShoot,
-    BossSlam,
-    BossHit,
-    BossDefeated,
-    ProjectileBurst,
 };
 
 struct WorldEvent {
@@ -95,23 +92,21 @@ struct Checkpoint {
     bool active = false;
 };
 
-struct Projectile {
-    Body body;
-    bool alive = true;
+struct Spring {
+    Rect area;
+    float squash = 0.f;  ///< >0 — пружина только что сработала (для анимации)
 };
 
-enum class BossState { Dormant, Hover, Telegraph, Slam, Stunned, Rise, Dead };
+/// Сюжетная точка «!»: невидимая черта во всю высоту уровня — мимо не пройти.
+struct StoryPoint {
+    float x = 0.f;
+    bool fired = false;
+};
 
-struct Boss {
-    bool present = false;
-    Body body;
-    BossState state = BossState::Dormant;
-    int hp = 4;
-    int maxHp = 4;
-    float timer = 0.f;
-    float shootTimer = 0.f;
-    float hoverY = 0.f;
-    float hurtFlash = 0.f;
+/// Осколок памяти «?»: необязательная находка с кусочком истории мира.
+struct Shard {
+    Vec2 pos;  ///< центр
+    bool taken = false;
 };
 
 class World {
@@ -128,25 +123,28 @@ public:
     [[nodiscard]] const std::vector<Pickup>& pickups() const { return pickups_; }
     [[nodiscard]] const std::vector<Buddy>& buddies() const { return buddies_; }
     [[nodiscard]] const std::vector<Checkpoint>& checkpoints() const { return checkpoints_; }
-    [[nodiscard]] const std::vector<Projectile>& projectiles() const { return projectiles_; }
-    [[nodiscard]] const Boss& boss() const { return boss_; }
+    [[nodiscard]] const std::vector<Spring>& springs() const { return springs_; }
+    [[nodiscard]] const std::vector<StoryPoint>& storyPoints() const { return storyPoints_; }
+    [[nodiscard]] const std::vector<Shard>& shards() const { return shards_; }
     [[nodiscard]] bool hasFinish() const { return hasFinish_; }
     [[nodiscard]] Rect finish() const { return finish_; }
     [[nodiscard]] const Abilities& abilities() const { return abilities_; }
     [[nodiscard]] bool completed() const { return completed_; }
     [[nodiscard]] int pickupsCollected() const { return pickupsCollected_; }
+    [[nodiscard]] int shardsCollected() const { return shardsCollected_; }
     [[nodiscard]] int deaths() const { return deaths_; }
     [[nodiscard]] float time() const { return time_; }
 
+    /// Завершить уровень немедленно (режим показа --demo).
+    void forceComplete() { completed_ = true; }
+
     // для тестов
     Player& mutablePlayer() { return player_; }
-    Boss& mutableBoss() { return boss_; }
 
 private:
     void updatePlayer(float dt, const Input& in);
     void updateEnemies(float dt);
-    void updateBoss(float dt);
-    void updateProjectiles(float dt);
+    void updateSprings(float dt);
     void checkTriggers();
     void hurtPlayer(float sourceX);
     void killPlayer();
@@ -164,13 +162,15 @@ private:
     std::vector<Pickup> pickups_;
     std::vector<Buddy> buddies_;
     std::vector<Checkpoint> checkpoints_;
-    std::vector<Projectile> projectiles_;
-    Boss boss_;
+    std::vector<Spring> springs_;
+    std::vector<StoryPoint> storyPoints_;
+    std::vector<Shard> shards_;
     Rect finish_;
     bool hasFinish_ = false;
 
     bool completed_ = false;
     int pickupsCollected_ = 0;
+    int shardsCollected_ = 0;
     int deaths_ = 0;
     float time_ = 0.f;
     std::vector<WorldEvent> events_;

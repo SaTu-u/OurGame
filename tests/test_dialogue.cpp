@@ -5,7 +5,7 @@
 using namespace pix;
 
 TEST_CASE("dialogue: печатная машинка и пропуск") {
-    Dialogue d({{"Глюк", "Привет"}, {"", "Пока"}}, 10.f);
+    Dialogue d({{"Алина", "Привет"}, {"", "Пока"}}, 10.f);
     CHECK_FALSE(d.finished());
     CHECK(d.visibleText().empty());
 

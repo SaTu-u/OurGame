@@ -55,7 +55,7 @@ TerminalWorld::TerminalWorld(const std::vector<std::string>& mapLines, Config co
     if (!portalFound) portal_ = {width_ / 2, height_ / 2};
 
     brightness_ = cfg_.maxBrightness;
-    gcTimer_ = cfg_.firstGcDelay;
+    wipeTimer_ = cfg_.firstWipeDelay;
     rebuildDistanceField();
 
     while (static_cast<int>(bits_.size()) < cfg_.targetBits && spawnBit()) {
@@ -80,6 +80,14 @@ int TerminalWorld::bugAt(Point p) const {
     return -1;
 }
 
+bool TerminalWorld::visible(Point p) const {
+    if (cfg_.visionRadius <= 0) return true;
+    // Овал, вытянутый по горизонтали: символы в терминале примерно вдвое выше, чем шире.
+    const int dx = p.x - hero_.x;
+    const int dy = p.y - hero_.y;
+    return dx * dx + 4 * dy * dy <= cfg_.visionRadius * cfg_.visionRadius;
+}
+
 int TerminalWorld::distanceToHero(Point p) const {
     return inside(p) ? distance_[static_cast<std::size_t>(index(p))] : -1;
 }
@@ -101,12 +109,14 @@ std::vector<Event> TerminalWorld::drainEvents() {
 void TerminalWorld::move(Dir d) {
     if (dead_ || escaped_) return;
     facing_ = d;
+    if (moveCooldown_ > 0.f) return;  // повернуться можно всегда, шагнуть — не чаще moveInterval
     const Point target = step(hero_, d);
     if (!walkable(target)) return;
     if (bugAt(target) >= 0) {
         hurt();  // врезался в жука — укусил
         return;
     }
+    moveCooldown_ = cfg_.moveInterval;
     enterCell(target);
 }
 
@@ -193,12 +203,13 @@ void TerminalWorld::update(float dt) {
     if (dead_ || escaped_) return;
     time_ += dt;
     invuln_ = std::max(0.f, invuln_ - dt);
+    moveCooldown_ = std::max(0.f, moveCooldown_ - dt);
     eraseCd_ = std::max(0.f, eraseCd_ - dt);
     dashCd_ = std::max(0.f, dashCd_ - dt);
 
     updateBits(dt);
     updateBugs(dt);
-    updateGc(dt);
+    updateWipe(dt);
 }
 
 void TerminalWorld::updateBits(float dt) {
@@ -272,38 +283,38 @@ void TerminalWorld::stepBug(std::size_t i) {
     }
 }
 
-void TerminalWorld::updateGc(float dt) {
-    switch (gcPhase_) {
-        case GcPhase::Idle:
-            gcTimer_ -= dt;
-            if (gcTimer_ <= 0.f) {
-                gcPhase_ = GcPhase::Warning;
-                gcTimer_ = cfg_.gcWarning;
-                emit(EventType::GcWarning, hero_);
+void TerminalWorld::updateWipe(float dt) {
+    switch (wipePhase_) {
+        case WipePhase::Idle:
+            wipeTimer_ -= dt;
+            if (wipeTimer_ <= 0.f) {
+                wipePhase_ = WipePhase::Warning;
+                wipeTimer_ = cfg_.wipeWarning;
+                emit(EventType::WipeWarning, hero_);
             }
             break;
-        case GcPhase::Warning:
-            gcTimer_ -= dt;
-            if (gcTimer_ <= 0.f) {
-                gcPhase_ = GcPhase::Sweeping;
-                gcProgress_ = 0.f;
-                gcColumn_ = -1;
-                emit(EventType::GcStarted, hero_);
+        case WipePhase::Warning:
+            wipeTimer_ -= dt;
+            if (wipeTimer_ <= 0.f) {
+                wipePhase_ = WipePhase::Sweeping;
+                wipeProgress_ = 0.f;
+                wipeColumn_ = -1;
+                emit(EventType::WipeStarted, hero_);
             }
             break;
-        case GcPhase::Sweeping: {
-            gcProgress_ += dt * cfg_.gcColumnsPerSecond;
-            const int target = std::min(width_ - 1, static_cast<int>(gcProgress_));
-            while (gcColumn_ < target && !dead_) sweepColumn(++gcColumn_);
-            // Стоишь в колонне сборщика и не двигаешься — тебя тоже соберут.
-            if (hero_.x == gcColumn_ && heroIdle() && invuln_ <= 0.f && !dead_) {
-                emit(EventType::GcHitHero, hero_);
+        case WipePhase::Sweeping: {
+            wipeProgress_ += dt * cfg_.wipeColumnsPerSecond;
+            const int target = std::min(width_ - 1, static_cast<int>(wipeProgress_));
+            while (wipeColumn_ < target && !dead_) sweepColumn(++wipeColumn_);
+            // Стоишь на пути волны и не двигаешься — тебя тоже сотрёт.
+            if (hero_.x == wipeColumn_ && heroIdle() && invuln_ <= 0.f && !dead_) {
+                emit(EventType::WipeHitHero, hero_);
                 hurt();
             }
-            if (gcColumn_ >= width_ - 1) {
-                gcPhase_ = GcPhase::Idle;
-                gcTimer_ = cfg_.gcInterval;
-                gcColumn_ = -1;
+            if (wipeColumn_ >= width_ - 1) {
+                wipePhase_ = WipePhase::Idle;
+                wipeTimer_ = cfg_.wipeInterval;
+                wipeColumn_ = -1;
             }
             break;
         }
@@ -314,7 +325,7 @@ void TerminalWorld::sweepColumn(int column) {
     std::erase_if(bits_, [column](const Bit& b) { return b.pos.x == column; });
     for (auto it = bugs_.begin(); it != bugs_.end();) {
         if (it->pos.x == column) {
-            emit(EventType::GcKilledBug, it->pos);
+            emit(EventType::WipeKilledBug, it->pos);
             it = bugs_.erase(it);
         } else {
             ++it;

@@ -16,30 +16,42 @@ constexpr float kPi = 3.14159265f;
 
 constexpr Color kPlayer{245, 247, 255, 255};
 constexpr Color kPlayerGlow{120, 220, 255, 255};
-constexpr Color kGlitch{110, 255, 150, 255};
-constexpr Color kShader{255, 190, 90, 255};
+constexpr Color kAlina{110, 255, 150, 255};
+constexpr Color kEgor{255, 190, 90, 255};
 constexpr Color kEnemy{70, 12, 36, 255};
 constexpr Color kEnemyEye{255, 60, 90, 255};
 constexpr Color kPixel{255, 228, 120, 255};
 constexpr Color kPortal{160, 130, 255, 255};
-constexpr Color kBoss{38, 38, 56, 255};
-constexpr Color kBossVisor{255, 40, 70, 255};
+constexpr Color kShard{196, 150, 255, 255};
+constexpr Color kSpring{120, 255, 220, 255};
 constexpr Color kText{238, 240, 255, 255};
 constexpr Color kTextDim{170, 168, 200, 255};
 
 const PrettyPalette kPalettes[] = {
-    // Неоновый закат
+    // 1. Неоновые холмы — мир вспомнил цвет
     {{10, 6, 32, 255}, {64, 20, 98, 255}, {255, 96, 140, 255},
      {255, 214, 102, 255}, {255, 64, 140, 255},
      {{92, 36, 128, 255}, {58, 22, 92, 255}, {32, 12, 58, 255}},
      {40, 28, 82, 255}, {20, 13, 46, 255}, {61, 242, 255, 255},
      {255, 70, 130, 255}},
-    // Ядро системы — холоднее и тревожнее
-    {{4, 6, 20, 255}, {16, 30, 66, 255}, {220, 50, 80, 255},
-     {255, 120, 90, 255}, {200, 20, 70, 255},
-     {{40, 40, 96, 255}, {24, 26, 66, 255}, {12, 14, 40, 255}},
-     {30, 32, 70, 255}, {12, 12, 32, 255}, {255, 90, 120, 255},
-     {255, 200, 80, 255}},
+    // 2. Город, которого нет — холодная синяя ночь
+    {{4, 8, 26, 255}, {14, 40, 84, 255}, {60, 150, 190, 255},
+     {214, 240, 255, 255}, {110, 170, 255, 255},
+     {{30, 60, 112, 255}, {18, 40, 82, 255}, {8, 22, 50, 255}},
+     {24, 38, 78, 255}, {10, 18, 40, 255}, {120, 200, 255, 255},
+     {255, 110, 110, 255}},
+    // 3. Мост — рассвет: тёплое небо над холодной землёй
+    {{28, 20, 60, 255}, {150, 70, 110, 255}, {255, 190, 120, 255},
+     {255, 244, 200, 255}, {255, 150, 90, 255},
+     {{120, 70, 110, 255}, {76, 44, 86, 255}, {40, 24, 56, 255}},
+     {52, 36, 78, 255}, {26, 16, 44, 255}, {255, 214, 120, 255},
+     {255, 80, 120, 255}},
+    // 4. Разлом — граница миров: почти чёрное небо и белый свет
+    {{2, 2, 10, 255}, {22, 16, 52, 255}, {150, 120, 255, 255},
+     {255, 255, 255, 255}, {190, 170, 255, 255},
+     {{48, 36, 100, 255}, {28, 20, 64, 255}, {12, 8, 32, 255}},
+     {30, 26, 66, 255}, {10, 8, 26, 255}, {210, 190, 255, 255},
+     {255, 90, 150, 255}},
 };
 
 float hashNoise(float x, float seed) {
@@ -49,10 +61,9 @@ float hashNoise(float x, float seed) {
 }
 
 Color speakerColor(const std::string& speaker) {
-    if (speaker == "Пиксель") return kPlayerGlow;
-    if (speaker == "Глюк") return kGlitch;
-    if (speaker == "Шейдер") return kShader;
-    if (speaker == "Сборщик Мусора") return kBossVisor;
+    if (speaker == "Тимур") return kPlayerGlow;
+    if (speaker == "Алина") return kAlina;
+    if (speaker == "Егор") return kEgor;
     return kTextDim;
 }
 
@@ -111,7 +122,7 @@ void PrettyRenderer::onEvent(const WorldEvent& e, const World& world) {
                                     .life = 0.35f, .size = 8.f, .gravity = 200.f, .angle = kPi * 0.5f, .spread = 2.4f});
             break;
         case EventType::AirJump:
-            particles_.burst(feet, {.count = 14, .color = withAlpha(kGlitch, 0.8f), .speedMin = 80.f,
+            particles_.burst(feet, {.count = 14, .color = withAlpha(kAlina, 0.8f), .speedMin = 80.f,
                                     .speedMax = 200.f, .life = 0.4f, .size = 9.f, .angle = kPi * 0.5f, .spread = 2.f});
             break;
         case EventType::Land:
@@ -124,7 +135,7 @@ void PrettyRenderer::onEvent(const WorldEvent& e, const World& world) {
             break;
         case EventType::Dash:
             addTrauma(0.15f);
-            particles_.burst(at, {.count = 16, .color = withAlpha(kShader, 0.9f), .speedMin = 100.f,
+            particles_.burst(at, {.count = 16, .color = withAlpha(kEgor, 0.9f), .speedMin = 100.f,
                                   .speedMax = 300.f, .life = 0.35f, .size = 9.f,
                                   .angle = e.value > 0 ? kPi : 0.f, .spread = 1.2f});
             break;
@@ -163,7 +174,7 @@ void PrettyRenderer::onEvent(const WorldEvent& e, const World& world) {
             break;
         case EventType::BuddyMet:
             flash_ = 0.35f;
-            particles_.burst(at, {.count = 50, .color = e.value == 1 ? kGlitch : kShader, .speedMin = 60.f,
+            particles_.burst(at, {.count = 50, .color = e.value == 1 ? kAlina : kEgor, .speedMin = 60.f,
                                   .speedMax = 380.f, .life = 1.f, .size = 11.f});
             break;
         case EventType::LevelComplete:
@@ -171,35 +182,17 @@ void PrettyRenderer::onEvent(const WorldEvent& e, const World& world) {
             particles_.burst(at, {.count = 70, .color = kPortal, .speedMin = 100.f, .speedMax = 500.f,
                                   .life = 1.1f, .size = 12.f});
             break;
-        case EventType::BossShoot:
-            particles_.burst(at, {.count = 6, .color = {255, 120, 60, 255}, .speedMin = 30.f, .speedMax = 90.f,
-                                  .life = 0.3f, .size = 8.f});
+        case EventType::Spring:
+            particles_.burst(at, {.count = 16, .color = kSpring, .speedMin = 80.f, .speedMax = 320.f, .life = 0.4f,
+                                  .size = 8.f, .angle = -kPi * 0.5f, .spread = 1.4f});
             break;
-        case EventType::BossSlam:
-            addTrauma(0.7f);
-            particles_.burst(at, {.count = 40, .color = {255, 150, 120, 200}, .speedMin = 120.f, .speedMax = 460.f,
-                                  .life = 0.6f, .size = 10.f, .gravity = 400.f, .angle = -kPi * 0.5f,
-                                  .spread = 2.8f});
-            break;
-        case EventType::BossHit:
-            addTrauma(0.6f);
+        case EventType::Shard:
             flash_ = 0.3f;
-            particles_.burst(at, {.count = 40, .color = kBossVisor, .speedMin = 100.f, .speedMax = 420.f,
-                                  .life = 0.7f, .size = 11.f});
+            particles_.burst(at, {.count = 60, .color = kShard, .speedMin = 60.f, .speedMax = 420.f, .life = 1.2f,
+                                  .size = 11.f, .drag = 1.5f});
+            texts_.push_back({{at.x, at.y - 30.f}, "Осколок памяти", kShard, 1.6f});
             break;
-        case EventType::BossDefeated:
-            addTrauma(1.f);
-            flash_ = 1.f;
-            particles_.burst(at, {.count = 160, .color = kBossVisor, .speedMin = 100.f, .speedMax = 900.f,
-                                  .life = 1.6f, .size = 14.f, .drag = 1.2f});
-            particles_.burst(at, {.count = 120, .color = kPlayerGlow, .speedMin = 50.f, .speedMax = 700.f,
-                                  .life = 2.f, .size = 12.f, .drag = 1.f});
-            break;
-        case EventType::ProjectileBurst:
-            particles_.burst(at, {.count = 10, .color = {255, 140, 70, 255}, .speedMin = 60.f, .speedMax = 200.f,
-                                  .life = 0.4f, .size = 8.f, .gravity = 300.f});
-            break;
-        case EventType::BossAwake: addTrauma(0.4f); break;
+        case EventType::StoryPoint: break;
     }
 }
 
@@ -209,7 +202,6 @@ void PrettyRenderer::update(float dt, const World& world) {
     time_ += dt;
     flash_ = std::max(0.f, flash_ - dt * 1.6f);
     squash_ = std::max(0.f, squash_ - dt * 5.f);
-    bossVisor_ += dt;
 
     // Камера плавно догоняет героя и немного смотрит вперёд по ходу движения.
     const Player& p = world.player();
@@ -236,7 +228,7 @@ void PrettyRenderer::update(float dt, const World& world) {
         const Rect r = p.body.rect();
         ghosts_.push_back({{r.x * kTile, r.y * kTile, r.w * kTile, r.h * kTile}, 0.25f});
         particles_.emit({c, {particles_.random(-40.f, 40.f), particles_.random(-40.f, 40.f)}, 0.4f, 0.4f, 10.f, 0.f,
-                         withAlpha(kShader, 0.7f), 2.f, 0.f, true});
+                         withAlpha(kEgor, 0.7f), 2.f, 0.f, true});
     }
     for (auto& g : ghosts_) g.life -= dt;
     std::erase_if(ghosts_, [](const Ghost& g) { return g.life <= 0.f; });
@@ -286,10 +278,10 @@ void PrettyRenderer::draw(const World& world, const StageView& view) {
     drawFinish(world);
     drawCheckpoints(world);
     drawPickups(world);
+    drawSprings(world);
+    drawShards(world);
     drawBuddies(world);
     drawEnemies(world);
-    drawProjectiles(world);
-    drawBoss(world);
     drawFollowers(world);
     drawPlayer(world);
     particles_.draw(glow_);
@@ -300,10 +292,7 @@ void PrettyRenderer::draw(const World& world, const StageView& view) {
     EndMode2D();
 
     DrawTexturePro(vignette_, {0.f, 0.f, 256.f, 256.f}, {0.f, 0.f, kW, kH}, {0.f, 0.f}, 0.f, WHITE);
-    if (!view.dialogue) {
-        drawHud(world, view);
-        drawBossBar(world);
-    }
+    if (!view.dialogue) drawHud(world, view);
     drawLevelTitle(view);
     if (flash_ > 0.f) DrawRectangle(0, 0, kW, kH, withAlpha(WHITE, flash_ * 0.6f));
     if (view.dialogue && !view.dialogue->finished()) drawDialogue(*view.dialogue);
@@ -491,16 +480,50 @@ void PrettyRenderer::drawEnemies(const World& world) const {
     }
 }
 
+void PrettyRenderer::drawSprings(const World& world) const {
+    for (const Spring& spring : world.springs()) {
+        // Светящаяся площадка со стрелками вверх; при срабатывании сплющивается.
+        const float cx = spring.area.center().x * kTile;
+        const float bottom = spring.area.bottom() * kTile;
+        const float h = 14.f - spring.squash * 8.f;
+        glow({cx, bottom - 8.f}, 120.f + spring.squash * 80.f, withAlpha(kSpring, 0.35f + spring.squash * 0.4f));
+        DrawRectangleRounded({cx - 19.f, bottom - h, 38.f, h}, 0.6f, 6, kSpring);
+        DrawRectangleRounded({cx - 14.f, bottom - h + 3.f, 28.f, 3.f}, 1.f, 4, withAlpha(WHITE, 0.7f));
+        for (int i = 0; i < 2; ++i) {
+            const float rise = std::fmod(time_ * 40.f + static_cast<float>(i) * 14.f, 28.f);
+            const float y = bottom - 22.f - rise;
+            const Color c = withAlpha(kSpring, 0.7f * (1.f - rise / 28.f));
+            DrawLineEx({cx - 8.f, y + 6.f}, {cx, y}, 3.f, c);
+            DrawLineEx({cx, y}, {cx + 8.f, y + 6.f}, 3.f, c);
+        }
+    }
+}
+
+void PrettyRenderer::drawShards(const World& world) const {
+    for (const Shard& shard : world.shards()) {
+        if (shard.taken) continue;
+        // Осколок памяти: вытянутый кристалл, который медленно вращается и манит светом.
+        const Vector2 c = toPixels(shard.pos);
+        const Vector2 at{c.x, c.y + std::sin(time_ * 2.f + shard.pos.x) * 7.f};
+        glow(at, 220.f, withAlpha(kShard, 0.5f + 0.2f * std::sin(time_ * 3.f)));
+        const float turn = std::sin(time_ * 1.5f + shard.pos.x) * 12.f;
+        DrawTriangle({at.x, at.y - 24.f}, {at.x - 11.f + turn * 0.3f, at.y}, {at.x + 11.f + turn * 0.3f, at.y}, kShard);
+        DrawTriangle({at.x - 11.f + turn * 0.3f, at.y}, {at.x, at.y + 24.f}, {at.x + 11.f + turn * 0.3f, at.y},
+                     mix(kShard, {90, 60, 170, 255}, 0.5f));
+        DrawLineEx({at.x, at.y - 24.f}, {at.x + turn * 0.3f, at.y}, 2.f, withAlpha(WHITE, 0.8f));
+    }
+}
+
 void PrettyRenderer::drawBuddies(const World& world) const {
     for (const Buddy& b : world.buddies()) {
         if (b.met) continue;
-        const Color c = b.id == 1 ? kGlitch : kShader;
+        const Color c = b.id == 1 ? kAlina : kEgor;
         const Vector2 base = toPixels(b.pos);
         const float bob = std::sin(time_ * 3.f) * 5.f;
         const Rectangle body{base.x - 15.f, base.y - 34.f + bob, 30.f, 30.f};
         glow({base.x, body.y + 15.f}, 170.f, withAlpha(c, 0.55f));
         if (b.id == 2) {
-            // Шейдер — источник света: вокруг него крутятся лучи.
+            // Егор держит свет: вокруг него медленно крутятся лучи.
             BeginBlendMode(BLEND_ADDITIVE);
             for (int i = 0; i < 6; ++i) {
                 const float a = time_ * 0.8f + static_cast<float>(i) * kPi / 3.f;
@@ -510,78 +533,18 @@ void PrettyRenderer::drawBuddies(const World& world) const {
                              withAlpha(c, 0.12f));
             }
             EndBlendMode();
-        } else if (static_cast<int>(time_ * 5.f) % 7 == 0) {
-            // Глюк иногда «двоится» по цветовым каналам.
-            DrawRectangleRounded({body.x - 4.f, body.y, body.width, body.height}, 0.3f, 6, withAlpha(RED, 0.5f));
-            DrawRectangleRounded({body.x + 4.f, body.y, body.width, body.height}, 0.3f, 6, withAlpha(BLUE, 0.5f));
         }
         DrawRectangleRounded(body, 0.3f, 6, c);
         DrawRectangleRounded({body.x + 8.f, body.y + 9.f, 4.f, 8.f}, 1.f, 4, {20, 20, 30, 255});
         DrawRectangleRounded({body.x + 18.f, body.y + 9.f, 4.f, 8.f}, 1.f, 4, {20, 20, 30, 255});
-        drawTextCentered(ctx_.fonts->title, "!", {base.x, body.y - 44.f + bob * 0.5f}, 36.f, 0.f, c);
+        drawTextCentered(ctx_.fonts->ui, b.id == 1 ? "Алина" : "Егор", {base.x, body.y - 34.f + bob * 0.5f}, 22.f, 1.f, c);
     }
-}
-
-void PrettyRenderer::drawProjectiles(const World& world) const {
-    for (const Projectile& shot : world.projectiles()) {
-        const Vector2 c = toPixels(shot.body.center());
-        glow(c, 80.f, {255, 120, 60, 200});
-        DrawPoly(c, 4, 12.f, time_ * 400.f, {255, 150, 80, 255});
-    }
-}
-
-void PrettyRenderer::drawBoss(const World& world) const {
-    const Boss& boss = world.boss();
-    if (!boss.present || boss.state == BossState::Dead) return;
-    const Rect r = boss.body.rect();
-    Rectangle body{r.x * kTile, r.y * kTile, r.w * kTile, r.h * kTile};
-    if (boss.state == BossState::Telegraph) body.x += std::sin(time_ * 80.f) * 4.f;  // дрожит перед ударом
-
-    const bool stunned = boss.state == BossState::Stunned;
-    const Vector2 center{body.x + body.width * 0.5f, body.y + body.height * 0.5f};
-    glow(center, 420.f, withAlpha(kBossVisor, stunned ? 0.15f : 0.35f));
-    if (boss.state == BossState::Hover || boss.state == BossState::Rise) {
-        // Двигатели снизу.
-        for (int i = 0; i < 2; ++i) {
-            const Vector2 jet{body.x + body.width * (0.25f + 0.5f * static_cast<float>(i)), body.y + body.height};
-            glow(jet, 70.f + std::sin(time_ * 30.f) * 10.f, {255, 140, 80, 220});
-        }
-    }
-    DrawRectangleRounded(body, 0.25f, 10, kBoss);
-    DrawRectangleRoundedLinesEx(body, 0.25f, 10, 3.f, withAlpha(kBossVisor, 0.6f));
-    // Крышка «мусорного бака».
-    DrawRectangleRounded({body.x - 8.f, body.y - 12.f, body.width + 16.f, 16.f}, 0.6f, 8, {58, 58, 80, 255});
-
-    // Визор сканирует пространство слева направо.
-    const float visorW = body.width - 30.f;
-    const Rectangle visor{body.x + 15.f, body.y + 26.f, visorW, 16.f};
-    DrawRectangleRounded(visor, 1.f, 8, {20, 6, 14, 255});
-    if (!stunned || static_cast<int>(time_ * 12.f) % 2 == 0) {
-        const float scan = (std::sin(bossVisor_ * (boss.state == BossState::Telegraph ? 14.f : 3.f)) * 0.5f + 0.5f);
-        const Vector2 eye{visor.x + 10.f + scan * (visor.width - 20.f), visor.y + visor.height * 0.5f};
-        glow(eye, 120.f, kBossVisor);
-        DrawCircleV(eye, 7.f, {255, 200, 210, 255});
-    }
-    // Полоски-«рёбра» бака.
-    for (int i = 0; i < 4; ++i) {
-        const float x = body.x + 18.f + static_cast<float>(i) * (body.width - 36.f) / 3.f;
-        DrawRectangleRounded({x - 3.f, body.y + 54.f, 6.f, body.height - 64.f}, 1.f, 4, {55, 55, 78, 255});
-    }
-    if (stunned) {
-        // Звёздочки над головой оглушённого босса.
-        for (int i = 0; i < 4; ++i) {
-            const float a = time_ * 4.f + static_cast<float>(i) * kPi * 0.5f;
-            const Vector2 s{center.x + std::cos(a) * 50.f, body.y - 26.f + std::sin(a) * 10.f};
-            glow(s, 40.f, kPixel);
-            DrawPoly(s, 4, 5.f, time_ * 200.f, kPixel);
-        }
-    }
-    if (boss.hurtFlash > 0.f) DrawRectangleRounded(body, 0.25f, 10, withAlpha(WHITE, boss.hurtFlash * 2.f));
 }
 
 void PrettyRenderer::drawFollowers(const World& world) const {
+    // Алина и Егор идут следом по пути Тимура, каждый со своей задержкой.
     int index = 0;
-    const auto follower = [&](Color color, bool glitchy) {
+    const auto follower = [&](Color color) {
         const std::size_t delay = static_cast<std::size_t>(16 + index * 16);
         ++index;
         if (trail_.size() <= delay) return;
@@ -589,22 +552,18 @@ void PrettyRenderer::drawFollowers(const World& world) const {
         const float bob = std::sin(time_ * 4.f + static_cast<float>(index)) * 4.f;
         const Rectangle body{c.x - 11.f, c.y - 11.f + bob, 22.f, 22.f};
         glow({c.x, c.y + bob}, 110.f, withAlpha(color, 0.5f));
-        if (glitchy && static_cast<int>(time_ * 6.f) % 9 == 0) {
-            DrawRectangleRounded({body.x - 3.f, body.y, body.width, body.height}, 0.35f, 6, withAlpha(RED, 0.5f));
-            DrawRectangleRounded({body.x + 3.f, body.y, body.width, body.height}, 0.35f, 6, withAlpha(BLUE, 0.5f));
-        }
         DrawRectangleRounded(body, 0.35f, 6, color);
         DrawRectangleRounded({body.x + 5.f, body.y + 6.f, 3.f, 6.f}, 1.f, 4, {20, 20, 30, 255});
         DrawRectangleRounded({body.x + 13.f, body.y + 6.f, 3.f, 6.f}, 1.f, 4, {20, 20, 30, 255});
     };
-    if (world.abilities().doubleJump) follower(kGlitch, true);
-    if (world.abilities().dash) follower(kShader, false);
+    if (world.abilities().doubleJump) follower(kAlina);
+    if (world.abilities().dash) follower(kEgor);
 }
 
 void PrettyRenderer::drawPlayer(const World& world) const {
     const Player& p = world.player();
     for (const Ghost& g : ghosts_) {
-        DrawRectangleRounded(g.rect, 0.35f, 8, withAlpha(kShader, g.life * 1.6f));
+        DrawRectangleRounded(g.rect, 0.35f, 8, withAlpha(kEgor, g.life * 1.6f));
     }
     if (p.dead) return;
 
@@ -655,6 +614,14 @@ void PrettyRenderer::drawHud(const World& world, const StageView& view) const {
         std::to_string(world.pickupsCollected()) + " / " + std::to_string(world.pickups().size());
     DrawTextEx(ctx_.fonts->ui, pixels.c_str(), {60.f, 72.f}, 28.f, 1.f, kText);
 
+    if (!world.shards().empty()) {
+        const std::string shards =
+            std::to_string(world.shardsCollected()) + " / " + std::to_string(world.shards().size());
+        DrawTriangle({40.f, 110.f}, {32.f, 122.f}, {48.f, 122.f}, kShard);
+        DrawTriangle({32.f, 122.f}, {40.f, 134.f}, {48.f, 122.f}, mix(kShard, {90, 60, 170, 255}, 0.5f));
+        DrawTextEx(ctx_.fonts->ui, shards.c_str(), {60.f, 108.f}, 28.f, 1.f, kText);
+    }
+
     const std::string level = "Уровень " + std::to_string(view.levelIndex + 1) + " · " + std::string(view.levelTitle);
     DrawTextEx(ctx_.fonts->ui, level.c_str(), {kW - 28.f - textWidth(ctx_.fonts->ui, level, 22.f, 1.f), 28.f}, 22.f,
                1.f, withAlpha(kText, 0.65f));
@@ -670,25 +637,8 @@ void PrettyRenderer::drawHud(const World& world, const StageView& view) const {
         DrawTextEx(ctx_.fonts->ui, text, {box.x + 28.f, box.y + 6.f}, 20.f, 1.f, kText);
         x += w + 12.f;
     };
-    if (world.abilities().doubleJump) chip("Двойной прыжок", kGlitch, 0.f);
-    if (world.abilities().dash) chip("Рывок · Shift", kShader, p.dashCooldown);
-}
-
-void PrettyRenderer::drawBossBar(const World& world) const {
-    const Boss& boss = world.boss();
-    if (!boss.present || boss.state == BossState::Dormant || boss.state == BossState::Dead) return;
-    const float w = 520.f;
-    const float x = (kW - w) * 0.5f;
-    drawTextCentered(ctx_.fonts->ui, "СБОРЩИК МУСОРА", {kW * 0.5f, 20.f}, 22.f, 4.f, kBossVisor);
-    for (int i = 0; i < boss.maxHp; ++i) {
-        const float segW = (w - static_cast<float>(boss.maxHp - 1) * 8.f) / static_cast<float>(boss.maxHp);
-        const Rectangle seg{x + static_cast<float>(i) * (segW + 8.f), 52.f, segW, 12.f};
-        if (i < boss.hp) {
-            DrawRectangleRounded(seg, 1.f, 6, kBossVisor);
-        } else {
-            DrawRectangleRoundedLinesEx(seg, 1.f, 6, 1.5f, withAlpha(kBossVisor, 0.4f));
-        }
-    }
+    if (world.abilities().doubleJump) chip("Двойной прыжок", kAlina, 0.f);
+    if (world.abilities().dash) chip("Рывок · Shift", kEgor, p.dashCooldown);
 }
 
 void PrettyRenderer::drawLevelTitle(const StageView& view) const {
@@ -697,7 +647,9 @@ void PrettyRenderer::drawLevelTitle(const StageView& view) const {
     if (t > 3.5f || view.dialogue) return;
     const float alpha = t < 0.6f ? t / 0.6f : (t > 2.6f ? 1.f - (t - 2.6f) / 0.9f : 1.f);
     const float rise = (1.f - easeOutCubic(t / 0.8f)) * 20.f;
-    drawTextCentered(ctx_.fonts->ui, "СТАДИЯ 3 · КРАСИВОЕ 2D", {kW * 0.5f, kH * 0.32f + rise}, 22.f, 6.f,
+    const std::string chapter = "КРАСИВОЕ 2D · УРОВЕНЬ " + std::to_string(view.levelIndex + 1) + " ИЗ " +
+                                std::to_string(view.levelCount);
+    drawTextCentered(ctx_.fonts->ui, chapter, {kW * 0.5f, kH * 0.32f + rise}, 22.f, 6.f,
                      withAlpha(palette_.edge, alpha));
     drawTextCentered(ctx_.fonts->title, view.levelTitle, {kW * 0.5f, kH * 0.36f + rise}, 72.f, 2.f,
                      withAlpha(kText, alpha));

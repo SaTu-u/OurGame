@@ -4,12 +4,12 @@
 // мир только считает, а TerminalStage его рисует. Поэтому мир легко тестировать.
 //
 // Правила:
-//   * герой — пиксель (курсор), ходит по клеткам;
-//   * биты 0/1 — еда. 8 бит = 1 байт, каждый байт открывает новый навык;
+//   * Тимур — пиксель (курсор), ходит по клеткам;
+//   * биты 0/1 — остатки данных мира. 8 бит = 1 байт, байты открывают навыки и портал;
 //   * жуки-баги (ж) чуют героя и идут к нему по кратчайшему пути;
-//   * Сборщик Мусора периодически проходит по экрану и удаляет всё «неиспользуемое»:
-//     жуков, биты и героя, если тот стоит без дела;
-//   * собрал 3 байта — открывается портал «>» к видеодрайверу.
+//   * Обнуление — волна Пустоты, которая проходит по экрану и стирает всё,
+//     что стоит на месте: жуков, биты и героя, если тот замер;
+//   * собрал нужное число байт — открывается портал «>» в следующий сектор.
 
 #include <cstdint>
 #include <random>
@@ -54,10 +54,10 @@ enum class EventType {
     Erased,     ///< использован Backspace
     BugErased,  ///< жук стёрт (Backspace или рывком)
     Dashed,
-    GcWarning,
-    GcStarted,
-    GcKilledBug,
-    GcHitHero,
+    WipeWarning,  ///< Обнуление скоро начнётся
+    WipeStarted,
+    WipeKilledBug,
+    WipeHitHero,
     PortalOpened,
     Escaped,
 };
@@ -68,13 +68,15 @@ struct Event {
     int value = 0;
 };
 
-enum class GcPhase { Idle, Warning, Sweeping };
+enum class WipePhase { Idle, Warning, Sweeping };
 
 /// Все «магические числа» баланса — в одном месте.
 struct Config {
     int bytesToWin = 3;
     int maxBrightness = 3;
     float invulnTime = 1.2f;
+    float moveInterval = 0.085f;  ///< не чаще одного шага за это время: зажатая клавиша не даёт «телепорт»
+    int visionRadius = 0;         ///< >0 — тьма: стены и жуков видно только рядом (биты светятся всегда)
 
     int targetBits = 10;  ///< сколько бит одновременно лежит на карте
     float bitRespawn = 0.9f;
@@ -87,11 +89,11 @@ struct Config {
     float bugStepMin = 0.2f;
     int chaseRadius = 9;
 
-    float firstGcDelay = 14.f;
-    float gcInterval = 22.f;
-    float gcWarning = 3.f;
-    float gcColumnsPerSecond = 22.f;
-    float idleThreshold = 0.8f;  ///< столько секунд без движения — и ты «мусор»
+    float firstWipeDelay = 14.f;
+    float wipeInterval = 22.f;
+    float wipeWarning = 3.f;
+    float wipeColumnsPerSecond = 22.f;
+    float idleThreshold = 0.8f;  ///< столько секунд без движения — и тебя сотрёт
 
     int eraseUnlockBytes = 1;
     int eraseRadius = 2;
@@ -147,10 +149,16 @@ public:
     [[nodiscard]] const std::vector<Bug>& bugs() const { return bugs_; }
     [[nodiscard]] const std::vector<Bit>& bits() const { return bits_; }
 
-    [[nodiscard]] GcPhase gcPhase() const { return gcPhase_; }
-    [[nodiscard]] float gcTimer() const { return gcTimer_; }
-    [[nodiscard]] int gcColumn() const { return gcColumn_; }
+    [[nodiscard]] WipePhase wipePhase() const { return wipePhase_; }
+    [[nodiscard]] float wipeTimer() const { return wipeTimer_; }
+    [[nodiscard]] int wipeColumn() const { return wipeColumn_; }
     [[nodiscard]] float time() const { return time_; }
+
+    /// Видна ли клетка герою (во тьме — только рядом с ним).
+    [[nodiscard]] bool visible(Point p) const;
+
+    /// Завершить сектор немедленно (режим показа --demo).
+    void forceEscape() { escaped_ = true; }
 
     /// Расстояние от клетки до героя по проходимым клеткам (-1 — недостижимо).
     [[nodiscard]] int distanceToHero(Point p) const;
@@ -176,7 +184,7 @@ private:
     void updateBits(float dt);
     void updateBugs(float dt);
     void stepBug(std::size_t i);
-    void updateGc(float dt);
+    void updateWipe(float dt);
     void sweepColumn(int column);
     bool spawnBug();
     bool spawnBit();
@@ -197,6 +205,7 @@ private:
     int brightness_ = 0;
     float invuln_ = 0.f;
     float lastMoveTime_ = 0.f;
+    float moveCooldown_ = 0.f;
     float eraseCd_ = 0.f;
     float dashCd_ = 0.f;
 
@@ -214,10 +223,10 @@ private:
     float bugSpawnTimer_ = 0.f;
     float bitTimer_ = 0.f;
 
-    GcPhase gcPhase_ = GcPhase::Idle;
-    float gcTimer_ = 0.f;
-    float gcProgress_ = 0.f;
-    int gcColumn_ = -1;
+    WipePhase wipePhase_ = WipePhase::Idle;
+    float wipeTimer_ = 0.f;
+    float wipeProgress_ = 0.f;
+    int wipeColumn_ = -1;
 
     float time_ = 0.f;
     std::vector<Event> events_;

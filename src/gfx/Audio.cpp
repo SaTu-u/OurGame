@@ -100,9 +100,8 @@ Samples design(Sfx sfx, SfxStyle style) {
         case Sfx::Dash: return mixed(noise(0.18f, 1.5f, 4, crude ? 6 : 1), sweep(0.18f, 200.f, 500.f, soft), 0.4f);
         case Sfx::Checkpoint: return notes({{523.f, 0.07f}, {659.f, 0.07f}, {784.f, 0.16f}}, soft);
         case Sfx::Buddy: return notes({{392.f, 0.08f}, {523.f, 0.08f}, {659.f, 0.08f}, {1046.f, 0.25f}}, soft);
-        case Sfx::BossHit: return mixed(sweep(0.3f, 160.f, 40.f, tone, 1.f), noise(0.3f, 1.5f, 5, 6), 0.7f);
-        case Sfx::BossSlam: return mixed(noise(0.45f, 1.2f, 6, 12), sweep(0.4f, 90.f, 30.f, sine, 1.f), 0.9f);
-        case Sfx::Shoot: return sweep(0.1f, 240.f, 120.f, soft);
+        case Sfx::Spring: return sweep(0.22f, 180.f, 1100.f, tone, 1.2f);
+        case Sfx::Shard: return notes({{784.f, 0.09f}, {988.f, 0.09f}, {1175.f, 0.09f}, {1568.f, 0.3f}}, sine);
         case Sfx::Blip: return sweep(0.025f, crude ? 600.f : 1400.f, crude ? 600.f : 1300.f, soft, 2.f);
         case Sfx::Select: return notes({{660.f, 0.04f}, {990.f, 0.06f}}, soft);
         case Sfx::Complete:

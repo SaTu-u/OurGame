@@ -9,12 +9,10 @@ namespace {
 
 constexpr Vec2 kPlayerSize{0.75f, 0.75f};
 constexpr Vec2 kEnemySize{0.8f, 0.6f};
-constexpr Vec2 kBossSize{2.6f, 2.f};
-constexpr Vec2 kProjectileSize{0.45f, 0.45f};
 constexpr float kRespawnDelay = 0.9f;
 constexpr float kPickupRadius = 0.7f;
+constexpr float kShardRadius = 0.9f;
 constexpr float kBuddyRadius = 1.3f;
-constexpr float kBossWakeDistance = 11.f;
 
 /// Ставит тело так, чтобы оно стояло на дне клетки (x, y) по центру.
 Vec2 standOn(int x, int y, Vec2 size) {
@@ -22,6 +20,8 @@ Vec2 standOn(int x, int y, Vec2 size) {
 }
 
 Rect tallTrigger(int x, int y) { return {static_cast<float>(x), static_cast<float>(y) - 1.f, 1.f, 2.f}; }
+
+Vec2 cellCenter(int x, int y) { return {static_cast<float>(x) + 0.5f, static_cast<float>(y) + 0.5f}; }
 
 }  // namespace
 
@@ -41,28 +41,28 @@ World::World(const TileMap& map, PhysicsConfig config, Abilities abilities)
                 enemies_.push_back(e);
                 break;
             }
-            case '*':
-                pickups_.push_back({{static_cast<float>(s.x) + 0.5f, static_cast<float>(s.y) + 0.5f}, false});
-                break;
+            case '*': pickups_.push_back({cellCenter(s.x, s.y), false}); break;
             case 'F':
                 finish_ = tallTrigger(s.x, s.y);
                 hasFinish_ = true;
                 break;
             case 'C': checkpoints_.push_back({tallTrigger(s.x, s.y), false}); break;
+            case 'S':
+                // Пружина — нижняя половина клетки.
+                springs_.push_back({{static_cast<float>(s.x) + 0.1f, static_cast<float>(s.y) + 0.5f, 0.8f, 0.5f}, 0.f});
+                break;
             case '1':
             case '2':
                 buddies_.push_back({{static_cast<float>(s.x) + 0.5f, static_cast<float>(s.y) + 1.f}, s.symbol - '0', false});
                 break;
-            case 'B':
-                boss_.present = true;
-                boss_.body.size = kBossSize;
-                boss_.body.pos = {static_cast<float>(s.x) + 0.5f - kBossSize.x * 0.5f, static_cast<float>(s.y)};
-                boss_.hoverY = boss_.body.pos.y;
-                break;
             default: break;
         }
     }
-    // Кента, которого уже встретили раньше, второй раз не встречаем.
+    // Сюжетные точки и осколки нумеруются слева направо — в том же порядке, что @talk и @shard в файле уровня.
+    for (const Spawn& s : map_.all('!')) storyPoints_.push_back({static_cast<float>(s.x), false});
+    for (const Spawn& s : map_.all('?')) shards_.push_back({cellCenter(s.x, s.y), false});
+
+    // Друга, которого уже встретили раньше, второй раз не встречаем.
     for (auto& b : buddies_) {
         if ((b.id == 1 && abilities_.doubleJump) || (b.id == 2 && abilities_.dash)) b.met = true;
     }
@@ -78,8 +78,7 @@ void World::update(float dt, const Input& input) {
     time_ += dt;
     updatePlayer(dt, input);
     updateEnemies(dt);
-    updateBoss(dt);
-    updateProjectiles(dt);
+    updateSprings(dt);
     checkTriggers();
 }
 
@@ -192,7 +191,6 @@ void World::respawn() {
     p.invuln = cfg_.invulnTime;
     p.dashTime = 0.f;
     p.jumpCut = true;
-    projectiles_.clear();
     emit(EventType::Respawn, p.body.center());
 }
 
@@ -219,13 +217,12 @@ void World::updateEnemies(float dt) {
         if (e.body.hitWall) {
             e.dir = -e.dir;
         } else if (e.body.onGround) {
-            // Жуки не дураки: с края платформы не падают.
+            // Жуки не дураки: с края платформы не падают и на шипы не лезут.
             const Rect r = e.body.rect();
             const Vec2 probe{e.dir > 0.f ? r.right() + 0.05f : r.left() - 0.05f, r.bottom() + 0.1f};
-            if (!solidAt(map_, probe) || map_.at(static_cast<int>(std::floor(probe.x)),
-                                                 static_cast<int>(std::floor(r.bottom() - 0.5f))) == Tile::Spike) {
-                e.dir = -e.dir;
-            }
+            const bool spikeAhead = map_.at(static_cast<int>(std::floor(probe.x)),
+                                            static_cast<int>(std::floor(r.bottom() - 0.5f))) == Tile::Spike;
+            if (!solidAt(map_, probe) || spikeAhead) e.dir = -e.dir;
         }
         if (e.body.pos.y > static_cast<float>(map_.height()) + 3.f) e.alive = false;
 
@@ -243,123 +240,23 @@ void World::updateEnemies(float dt) {
     }
 }
 
-// ---------------------------------------------------------------- босс
+// ---------------------------------------------------------------- пружины
 
-void World::updateBoss(float dt) {
-    if (!boss_.present || boss_.state == BossState::Dead) return;
-    Boss& b = boss_;
-    b.hurtFlash = std::max(0.f, b.hurtFlash - dt);
-    const int damage = b.maxHp - b.hp;  // чем больше урона, тем злее босс
-    const Vec2 target = player_.body.center();
-
-    switch (b.state) {
-        case BossState::Dormant:
-            if (!player_.dead && std::abs(target.x - b.body.center().x) < kBossWakeDistance) {
-                b.state = BossState::Hover;
-                b.timer = 3.f;
-                b.shootTimer = 1.5f;
-                emit(EventType::BossAwake, b.body.center());
-            }
-            return;
-        case BossState::Hover: {
-            const float speed = 5.f + 1.5f * static_cast<float>(damage);
-            b.body.vel.x = approach(b.body.vel.x, (target.x - b.body.center().x) * 2.f, 30.f * dt);
-            b.body.vel.x = std::clamp(b.body.vel.x, -speed, speed);
-            b.body.vel.y = (b.hoverY + std::sin(time_ * 3.f) * 0.3f - b.body.pos.y) * 4.f;
-            moveAndCollide(b.body, map_, dt);
-            b.shootTimer -= dt;
-            if (b.shootTimer <= 0.f) {
-                b.shootTimer = std::max(0.45f, 1.1f - 0.18f * static_cast<float>(damage));
-                Projectile shot;
-                shot.body.size = kProjectileSize;
-                shot.body.pos = {b.body.center().x - kProjectileSize.x * 0.5f, b.body.rect().bottom()};
-                shot.body.vel = {b.body.vel.x * 0.3f, 2.f};
-                projectiles_.push_back(shot);
-                emit(EventType::BossShoot, shot.body.center());
-            }
-            b.timer -= dt;
-            if (b.timer <= 0.f) {
-                b.state = BossState::Telegraph;
-                b.timer = std::max(0.35f, 0.7f - 0.1f * static_cast<float>(damage));
-                b.body.vel = {};
-            }
-            break;
-        }
-        case BossState::Telegraph:
-            b.timer -= dt;
-            if (b.timer <= 0.f) {
-                b.state = BossState::Slam;
-                b.body.vel = {0.f, 30.f};
-            }
-            break;
-        case BossState::Slam:
-            b.body.vel = {0.f, 30.f};
-            moveAndCollide(b.body, map_, dt);
-            if (b.body.onGround) {
-                b.state = BossState::Stunned;
-                b.timer = 2.2f;
-                emit(EventType::BossSlam, {b.body.center().x, b.body.rect().bottom()});
-            }
-            break;
-        case BossState::Stunned:
-            b.timer -= dt;
-            if (b.timer <= 0.f) {
-                b.state = BossState::Rise;
-            }
-            break;
-        case BossState::Rise:
-            b.body.vel = {0.f, -8.f};
-            moveAndCollide(b.body, map_, dt);
-            if (b.body.pos.y <= b.hoverY || b.body.hitCeiling) {
-                b.body.pos.y = std::max(b.body.pos.y, b.hoverY);
-                b.state = BossState::Hover;
-                b.timer = std::max(1.8f, 3.f - 0.3f * static_cast<float>(damage));
-            }
-            break;
-        case BossState::Dead: return;
+void World::updateSprings(float dt) {
+    Player& p = player_;
+    for (Spring& spring : springs_) {
+        spring.squash = std::max(0.f, spring.squash - dt * 4.f);
+        // Срабатывает, когда герой падает на неё или идёт по земле (но не когда летит вверх).
+        if (p.dead || p.body.vel.y < 0.f || !spring.area.intersects(p.body.rect())) continue;
+        p.body.vel.y = -cfg_.springSpeed;
+        p.body.onGround = false;
+        p.coyote = 0.f;
+        p.jumpCut = true;  // высота от пружины не зависит от кнопки прыжка
+        p.airJumps = abilities_.doubleJump ? 1 : 0;
+        p.dashTime = 0.f;
+        spring.squash = 1.f;
+        emit(EventType::Spring, spring.area.center());
     }
-
-    if (player_.dead || !player_.body.rect().intersects(b.body.rect())) return;
-
-    if (b.state == BossState::Stunned) {
-        // Оглушённого босса можно бить: прыжком сверху или рывком.
-        const bool stomp = isStomp(b.body.rect());
-        if (stomp || player_.dashing()) {
-            if (stomp) bounceOff();
-            --b.hp;
-            b.hurtFlash = 0.4f;
-            emit(EventType::BossHit, b.body.center(), b.hp);
-            if (b.hp <= 0) {
-                b.state = BossState::Dead;
-                completed_ = true;
-                projectiles_.clear();
-                emit(EventType::BossDefeated, b.body.center());
-            } else {
-                b.state = BossState::Rise;
-            }
-        }
-        return;
-    }
-    hurtPlayer(b.body.center().x);
-}
-
-void World::updateProjectiles(float dt) {
-    for (Projectile& shot : projectiles_) {
-        if (!shot.alive) continue;
-        shot.body.vel.y = std::min(shot.body.vel.y + cfg_.gravity * 0.4f * dt, cfg_.maxFallSpeed);
-        moveAndCollide(shot.body, map_, dt);
-        if (shot.body.onGround || shot.body.hitWall || shot.body.pos.y > static_cast<float>(map_.height())) {
-            shot.alive = false;
-            emit(EventType::ProjectileBurst, shot.body.center());
-            continue;
-        }
-        if (!player_.dead && player_.body.rect().intersects(shot.body.rect())) {
-            shot.alive = false;
-            emit(EventType::ProjectileBurst, shot.body.center());
-            hurtPlayer(shot.body.center().x);
-        }
-    }
-    std::erase_if(projectiles_, [](const Projectile& s) { return !s.alive; });
 }
 
 // ---------------------------------------------------------------- триггеры
@@ -377,12 +274,26 @@ void World::checkTriggers() {
         }
     }
 
+    for (std::size_t i = 0; i < shards_.size(); ++i) {
+        if (shards_[i].taken || distance(shards_[i].pos, pc) > kShardRadius) continue;
+        shards_[i].taken = true;
+        ++shardsCollected_;
+        emit(EventType::Shard, shards_[i].pos, static_cast<int>(i));
+    }
+
     for (Buddy& buddy : buddies_) {
         if (buddy.met || distance(buddy.pos, {pc.x, pr.bottom()}) > kBuddyRadius) continue;
         buddy.met = true;
         if (buddy.id == 1) abilities_.doubleJump = true;
         if (buddy.id == 2) abilities_.dash = true;
         emit(EventType::BuddyMet, buddy.pos, buddy.id);
+    }
+
+    // Сюжетная точка срабатывает, когда герой пересёк её по горизонтали — на любой высоте.
+    for (std::size_t i = 0; i < storyPoints_.size(); ++i) {
+        if (storyPoints_[i].fired || pc.x < storyPoints_[i].x) continue;
+        storyPoints_[i].fired = true;
+        emit(EventType::StoryPoint, pc, static_cast<int>(i));
     }
 
     for (std::size_t i = 0; i < checkpoints_.size(); ++i) {

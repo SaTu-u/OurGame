@@ -1,10 +1,11 @@
 // ИЗ ПИКСЕЛЯ В ЛЮДИ
 // Точка входа: решает, с какой стадии начать, и по очереди запускает стадии.
+// Чем больше Тимур меняется, тем больше уничтоженный мир вспоминает себя:
 //
-//   1. Терминал   — игра в консоли, ты пиксель           (src/terminal)
-//   2. Стрёмное 2D — окно 960x540, графика из Paint       (src/gfx/crude)
-//   3. Красивое 2D — окно растёт до 1280x720, неон и свет (src/gfx/pretty)
-//   4. Финал      — выход в реальность и видео            (src/gfx/finale)
+//   1. Терминал    — от мира осталась командная строка, ты пиксель (src/terminal)
+//   2. Стрёмное 2D — мир вспомнил форму: окно 960x540, графика из Paint (src/gfx/crude)
+//   3. Красивое 2D — мир вспомнил цвет: окно растёт до 1280x720 (src/gfx/pretty)
+//   4. Финал       — выход в реальность и видео (src/gfx/finale)
 
 #include <raylib.h>
 
@@ -37,12 +38,18 @@ struct WindowSize {
 constexpr WindowSize kCrudeWindow{960, 540};
 constexpr WindowSize kPrettyWindow{1280, 720};
 
-/// Прогресс для старта с конкретной стадии (--stage N): выдаём то, что игрок получил бы раньше.
-Progress progressForStage(StageId stage) {
+const std::vector<std::string> kCrudeLevels = {"crude_1.txt", "crude_2.txt", "crude_3.txt", "crude_4.txt"};
+const std::vector<std::string> kPrettyLevels = {"pretty_1.txt", "pretty_2.txt", "pretty_3.txt", "pretty_4.txt"};
+
+/// Прогресс для старта с конкретного места (--stage N --level M):
+/// выдаём навыки, которые игрок к этому моменту уже получил бы по сюжету.
+Progress progressFor(StageId stage, int level) {
     Progress p;
     p.stage = stage;
-    p.doubleJump = stage >= StageId::Pretty;
-    p.dash = stage >= StageId::Finale;
+    p.level = level;
+    // Алина учит двойному прыжку в конце первого уровня стрёмного 2D, Егор рывку — на первом уровне красивого.
+    p.doubleJump = stage >= StageId::Pretty || (stage == StageId::Crude && level >= 1);
+    p.dash = stage >= StageId::Finale || (stage == StageId::Pretty && level >= 1);
     return p;
 }
 
@@ -74,7 +81,7 @@ public:
           savePath_(assets_.parent_path() / "save.txt"),
           story_(Story::loadFile(assets_ / "story.txt")) {
         if (options_.startStage) {
-            progress_ = progressForStage(*options_.startStage);
+            progress_ = progressFor(*options_.startStage, options_.startLevel);
         } else if (auto saved = options_.fresh ? std::nullopt : loadProgress(savePath_)) {
             progress_ = *saved;
             if (progress_.stage != StageId::Terminal) {
@@ -107,10 +114,11 @@ private:
 
     /// false — игрок вышел из игры.
     bool runTerminal() {
-        const auto text = readTextFile(assets_ / "levels" / "terminal.txt");
-        if (!text) throw std::runtime_error("не найдена карта assets/levels/terminal.txt");
+        terminal::TerminalOptions terminalOptions;
+        terminalOptions.demo = options_.demo;
+        terminalOptions.save = [this] { save(); };
 
-        switch (terminal::runTerminalStage(story_, splitLines(*text), progress_)) {
+        switch (terminal::runTerminalStage(story_, assets_ / "levels", progress_, terminalOptions)) {
             case terminal::TerminalOutcome::Quit:
                 save();
                 return false;
@@ -120,7 +128,7 @@ private:
                             "А пока — сразу в графический режим...\n");
                 break;
             case terminal::TerminalOutcome::Escaped:
-                std::printf("Видеодрайвер установлен. Не закрывай эту консоль — в ней живёт душа игры.\n");
+                std::printf("Мир вспомнил форму. Не закрывай эту консоль — с неё всё началось.\n");
                 break;
         }
         advanceTo(StageId::Crude);
@@ -143,6 +151,7 @@ private:
         ctx.fonts = &fonts;
         ctx.save = [this] { save(); };
         ctx.noVideo = options_.noVideo;
+        ctx.demo = options_.demo;
 
         bool running = true;
         while (running && !WindowShouldClose()) {
@@ -153,7 +162,7 @@ private:
                 case StageId::Finale: {
                     const auto result = gfx::runFinale(ctx, progress_);
                     if (result == gfx::FinaleResult::Finished) {
-                        // Игра пройдена: следующий запуск снова начнётся с одинокого пикселя.
+                        // Игра пройдена: следующий запуск снова начнётся с чёрного экрана.
                         std::error_code ec;
                         fs::remove(savePath_, ec);
                     }
@@ -172,7 +181,7 @@ private:
         SetWindowTitle("Из пикселя в люди (видеодрайвер v0.1-beta, НЕ ОТВЕЧАЕТ)");
         gfx::CrudeRenderer renderer(ctx);
         gfx::StageSetup setup;
-        setup.levels = {"crude_1.txt", "crude_2.txt"};
+        setup.levels = kCrudeLevels;
         setup.physics = platformer::PhysicsConfig::crude();
         setup.sound = gfx::SfxStyle::Crude;
         setup.outro = "crude_outro";
@@ -189,7 +198,8 @@ private:
         SetWindowTitle("Из пикселя в люди");
         gfx::PrettyRenderer renderer(ctx);
         gfx::StageSetup setup;
-        setup.levels = {"pretty_1.txt", "pretty_2.txt"};
+        setup.levels = kPrettyLevels;
+        setup.outro = "pretty_outro";
         setup.physics = platformer::PhysicsConfig::polished();
         setup.sound = gfx::SfxStyle::Pretty;
         if (gfx::runPlatformerStage(ctx, setup, renderer, progress_) != gfx::StageResult::Completed) {

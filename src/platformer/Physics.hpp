@@ -25,6 +25,7 @@ struct PhysicsConfig {
     float dashDuration = 0.16f;
     float dashCooldown = 0.6f;
     float stompBounce = 0.75f;
+    float springSpeed = 30.f;  ///< с какой скоростью подбрасывает пружина
     float invulnTime = 1.f;
     float enemySpeed = 2.5f;
 

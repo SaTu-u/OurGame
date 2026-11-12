@@ -1,5 +1,6 @@
 #include "gfx/PlatformerStage.hpp"
 
+#include <deque>
 #include <optional>
 #include <stdexcept>
 
@@ -47,6 +48,8 @@ std::optional<Sfx> soundFor(EventType type) {
         case EventType::AirJump: return Sfx::AirJump;
         case EventType::Land: return Sfx::Land;
         case EventType::Dash: return Sfx::Dash;
+        case EventType::Spring: return Sfx::Spring;
+        case EventType::Shard: return Sfx::Shard;
         case EventType::Pickup: return Sfx::Pickup;
         case EventType::Stomp:
         case EventType::DashKill: return Sfx::Stomp;
@@ -55,11 +58,6 @@ std::optional<Sfx> soundFor(EventType type) {
         case EventType::Checkpoint: return Sfx::Checkpoint;
         case EventType::BuddyMet: return Sfx::Buddy;
         case EventType::LevelComplete: return Sfx::Complete;
-        case EventType::BossShoot: return Sfx::Shoot;
-        case EventType::BossSlam: return Sfx::BossSlam;
-        case EventType::BossHit:
-        case EventType::BossDefeated: return Sfx::BossHit;
-        case EventType::BossAwake: return Sfx::Select;
         default: return std::nullopt;
     }
 }
@@ -99,6 +97,8 @@ public:
                     pauseSelection_ = 0;
                     sounds_.play(Sfx::Select);
                 }
+                // Режим показа (--demo): N — сразу на следующий уровень.
+                if (ctx_.demo && IsKeyPressed(KEY_N)) world_.forceComplete();
                 updateWorld(dt);
                 levelTime_ += dt;
                 progress_.playSeconds += dt;
@@ -121,12 +121,18 @@ public:
         if (WindowShouldClose()) return false;
 
         progress_.pixels += world_.pickupsCollected();
+        progress_.shards += world_.shardsCollected();
         progress_.deaths += world_.deaths();
         return true;
     }
 
 private:
+    /// Показать секцию сюжета. Если разговор уже идёт — новая секция встанет в очередь.
     void startDialogue(std::string_view section) {
+        if (dialogue_) {
+            pendingSections_.emplace_back(section);
+            return;
+        }
         dialogue_.emplace(ctx_.story->section(section));
         typedChars_ = 0;
     }
@@ -141,7 +147,14 @@ private:
         if (confirmPressed()) {
             dialogue_->advance();
             typedChars_ = dialogue_->visibleText().size();
-            if (dialogue_->finished()) dialogue_.reset();
+            if (dialogue_->finished()) {
+                dialogue_.reset();
+                if (!pendingSections_.empty()) {
+                    const std::string next = pendingSections_.front();
+                    pendingSections_.pop_front();
+                    startDialogue(next);
+                }
+            }
         }
     }
 
@@ -193,8 +206,16 @@ private:
                 ctx_.save();
                 startDialogue(buddyStorySection(e.value));
                 break;
-            case EventType::BossAwake: startDialogue("boss_intro"); break;
-            case EventType::BossDefeated: startDialogue("boss_defeat"); break;
+            case EventType::StoryPoint:
+                if (const auto i = static_cast<std::size_t>(e.value); i < level_.talks.size()) {
+                    startDialogue(level_.talks[i]);
+                }
+                break;
+            case EventType::Shard:
+                if (const auto i = static_cast<std::size_t>(e.value); i < level_.shards.size()) {
+                    startDialogue(level_.shards[i]);
+                }
+                break;
             default: break;
         }
     }
@@ -228,6 +249,7 @@ private:
     Input input_;
     float accumulator_ = 0.f;
     std::optional<Dialogue> dialogue_;
+    std::deque<std::string> pendingSections_;
     std::size_t typedChars_ = 0;
     bool paused_ = false;
     int pauseSelection_ = 0;
@@ -239,7 +261,7 @@ private:
 
 }  // namespace
 
-std::string_view buddyStorySection(int buddyId) { return buddyId == 1 ? "crude_glitch" : "pretty_shader"; }
+std::string_view buddyStorySection(int buddyId) { return buddyId == 1 ? "meet_alina" : "meet_egor"; }
 
 StageResult runPlatformerStage(GameContext& ctx, const StageSetup& setup, PlatformerRenderer& renderer,
                                Progress& progress) {

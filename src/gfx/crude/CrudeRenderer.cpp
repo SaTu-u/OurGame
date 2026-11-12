@@ -1,6 +1,7 @@
 #include "gfx/crude/CrudeRenderer.hpp"
 
 #include <cmath>
+#include <iterator>
 
 #include "core/Utf8.hpp"
 
@@ -83,15 +84,16 @@ void CrudeRenderer::onEvent(const WorldEvent& e, const World&) {
             break;
         case EventType::Checkpoint: popup(e.pos, "СОХРАНЕНО (наверное)"); break;
         case EventType::BuddyMet:
-            burst(e.pos, 16, kLime);
+            burst(e.pos, 16, e.value == 1 ? kLime : kPaintOrange);
             glitchActive_ = 0.5f;
             break;
-        case EventType::BossSlam:
-            shake_ = 0.5f;
+        case EventType::Spring:
+            popup(e.pos, "БОИНГ!");
+            burst(e.pos, 6, WHITE);
             break;
-        case EventType::BossHit:
-            burst(e.pos, 14, kPaintOrange);
-            shake_ = 0.3f;
+        case EventType::Shard:
+            burst(e.pos, 18, kPaintPurple);
+            glitchActive_ = 0.3f;
             break;
         default: break;
     }
@@ -137,7 +139,7 @@ void CrudeRenderer::update(float dt, const World& world) {
     }
     std::erase_if(popups_, [](const Popup& p) { return p.life <= 0.f; });
 
-    // Запоминаем путь героя: кенты идут за ним «паровозиком».
+    // Запоминаем путь героя: друзья идут за ним «паровозиком».
     if (trail_.empty() || distance(trail_.front(), c) > 0.08f) trail_.push_front(c);
     while (trail_.size() > 80) trail_.pop_back();
 }
@@ -198,7 +200,9 @@ void CrudeRenderer::present() const {
 }
 
 void CrudeRenderer::drawBackground(int levelIndex) const {
-    ClearBackground(levelIndex % 2 == 0 ? kPaintBlue : Color{112, 146, 190, 255});
+    // У каждого уровня своё небо — насколько хватило палитры Paint.
+    constexpr Color skies[] = {kPaintBlue, {112, 146, 190, 255}, {200, 191, 231, 255}, {255, 174, 201, 255}};
+    ClearBackground(skies[static_cast<std::size_t>(levelIndex) % std::size(skies)]);
 
     // Солнце с лицом, нарисованное мышкой.
     const Vector2 sun{270.f, 30.f};
@@ -285,7 +289,7 @@ void CrudeRenderer::drawEntities(const World& world) const {
         const Vector2 s = toScreen({c.area.x, c.area.y});
         DrawRectangle(px(s.x + 4.f), px(s.y + 4.f), 2, 16, DARKGRAY);
         DrawTriangle({s.x + 6.f, s.y + 4.f}, {s.x + 6.f, s.y + 10.f}, {s.x + 13.f, s.y + 7.f},
-                     c.active ? kLime : kPaintBlue);
+                     c.active ? kLime : WHITE);  // синий флаг на синем небе не видно — пусть будет белый
     }
 
     for (const Pickup& p : world.pickups()) {
@@ -313,47 +317,56 @@ void CrudeRenderer::drawEntities(const World& world) const {
         DrawPixel(px(s.x) + eye + (e.dir > 0 ? 2 : 0), px(s.y) + 2, BLACK);
     }
 
+    for (const Spring& spring : world.springs()) {
+        // Пружина: коробочка с зигзагом, которая сплющивается при срабатывании.
+        const Vector2 s = toScreen({spring.area.x - 0.1f, spring.area.y - 0.5f});
+        const int squash = static_cast<int>(spring.squash * 3.f);
+        DrawRectangle(px(s.x) + 1, px(s.y) + 5 + squash, 8, 2, kPaintRed);
+        DrawLine(px(s.x) + 2, px(s.y) + 10, px(s.x) + 5, px(s.y) + 7 + squash, DARKGRAY);
+        DrawLine(px(s.x) + 5, px(s.y) + 7 + squash, px(s.x) + 8, px(s.y) + 10, DARKGRAY);
+    }
+
+    for (const Shard& shard : world.shards()) {
+        if (shard.taken) continue;
+        // Осколок памяти: фиолетовый ромб со знаком вопроса.
+        const float bob = std::sin(time_ * 3.f + shard.pos.x) * 2.f;
+        const Vector2 s = toScreen(shard.pos);
+        DrawPoly({s.x, s.y + bob}, 4, 6.f, 0.f, kPaintPurple);
+        DrawPolyLines({s.x, s.y + bob}, 4, 6.f, 0.f, BLACK);
+        DrawText("?", px(s.x) - 2, px(s.y + bob) - 4, 10, WHITE);
+    }
+
     for (const Buddy& b : world.buddies()) {
         if (b.met) continue;
-        std::uniform_int_distribution<int> j(-1, 1);
         const Vector2 s = toScreen({b.pos.x - 0.35f, b.pos.y - 0.7f});
-        const bool inverted = static_cast<int>(time_ * 3.f) % 5 == 0;
-        DrawRectangle(px(s.x) + j(rng_), px(s.y) + j(rng_), 7, 7, inverted ? kPaintPurple : kLime);
-        DrawText("!", px(s.x) + 2, px(s.y) - 12 + static_cast<int>(std::sin(time_ * 6.f) * 2.f), 10, BLACK);
-    }
-
-    for (const Projectile& p : world.projectiles()) {
-        const Vector2 s = toScreen(p.body.pos);
-        DrawRectangle(px(s.x), px(s.y), 5, 5, DARKGRAY);
-    }
-
-    const Boss& boss = world.boss();
-    if (boss.present && boss.state != BossState::Dead) {
-        const Rect r = boss.body.rect();
-        const Vector2 s = toScreen({r.x, r.y});
-        DrawRectangle(px(s.x), px(s.y), px(r.w * kTile), px(r.h * kTile), boss.hurtFlash > 0.f ? WHITE : GRAY);
-        DrawRectangle(px(s.x) + 4, px(s.y) + 6, px(r.w * kTile) - 8, 3, kPaintRed);
+        const char* name = b.id == 1 ? "АЛИНА" : "ЕГОР";
+        DrawRectangle(px(s.x), px(s.y), 7, 7, b.id == 1 ? kLime : kPaintOrange);
+        DrawRectangleLines(px(s.x), px(s.y), 7, 7, BLACK);
+        DrawPixel(px(s.x) + 2, px(s.y) + 2, BLACK);
+        DrawPixel(px(s.x) + 4, px(s.y) + 2, BLACK);
+        const float bob = std::sin(time_ * 6.f) * 2.f;
+        DrawTextEx(ctx_.fonts->crude, name, {s.x - 8.f, s.y - 13.f + bob}, 10.f, 0.f, BLACK);
     }
 }
 
 void CrudeRenderer::drawPlayer(const World& world) const {
     const Player& p = world.player();
 
-    // Кенты идут следом по пути героя.
+    // Друзья идут следом по пути героя: сначала Алина, за ней Егор.
     int followerIndex = 0;
-    const auto follower = [&](Color color, bool glitchy) {
+    const auto follower = [&](Color color) {
         const std::size_t delay = static_cast<std::size_t>(14 + followerIndex * 14);
         ++followerIndex;
         if (trail_.size() <= delay) return;
         const Vec2 pos = trail_[delay];
         const Vector2 s = toScreen({pos.x - 0.3f, pos.y - 0.3f});
-        std::uniform_int_distribution<int> j(-1, 1);
-        const int dx = glitchy ? j(rng_) : 0;
-        DrawRectangle(px(s.x) + dx, px(s.y), 6, 6, color);
-        DrawRectangleLines(px(s.x) + dx, px(s.y), 6, 6, BLACK);
+        DrawRectangle(px(s.x), px(s.y), 6, 6, color);
+        DrawRectangleLines(px(s.x), px(s.y), 6, 6, BLACK);
+        DrawPixel(px(s.x) + 2, px(s.y) + 2, BLACK);
+        DrawPixel(px(s.x) + 4, px(s.y) + 2, BLACK);
     };
-    if (world.abilities().doubleJump) follower(kLime, true);
-    if (world.abilities().dash) follower(kPaintOrange, false);
+    if (world.abilities().doubleJump) follower(kLime);
+    if (world.abilities().dash) follower(kPaintOrange);
 
     if (p.dead) return;
     if (p.invuln > 0.f && static_cast<int>(time_ * 20.f) % 2 == 0) return;
@@ -398,6 +411,12 @@ void CrudeRenderer::drawHud(const World& world, const StageView& view) const {
         "ПИКСЕЛИ " + std::to_string(world.pickupsCollected()) + "/" + std::to_string(world.pickups().size());
     DrawTextEx(f, pixels.c_str(), {3.f, 23.f}, 10.f, 0.f, BLACK);
 
+    if (!world.shards().empty()) {
+        const std::string shards =
+            "ПАМЯТЬ " + std::to_string(world.shardsCollected()) + "/" + std::to_string(world.shards().size());
+        DrawTextEx(f, shards.c_str(), {3.f, 33.f}, 10.f, 0.f, kPaintPurple);
+    }
+
     const std::string lvl = "УРОВЕНЬ " + std::to_string(view.levelIndex + 1) + "/" + std::to_string(view.levelCount);
     DrawTextEx(f, lvl.c_str(), {kW - textWidth(f, lvl, 10.f, 0.f) - 3.f, 1.f}, 10.f, 0.f, WHITE);
 
@@ -410,7 +429,7 @@ void CrudeRenderer::drawHud(const World& world, const StageView& view) const {
 void CrudeRenderer::drawDialogue(const Dialogue& dialogue) const {
     const Font& f = ctx_.fonts->crude;
     // Окно диалога сверху: внизу земля и герой, их закрывать нельзя.
-    const Rectangle box{6.f, 34.f, kW - 12.f, 52.f};
+    const Rectangle box{6.f, 34.f, kW - 12.f, 62.f};
     DrawRectangleRec(box, BLACK);
     DrawRectangleLinesEx(box, 1.f, WHITE);
 

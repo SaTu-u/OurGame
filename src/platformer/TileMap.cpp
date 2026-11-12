@@ -25,9 +25,11 @@ TileMap TileMap::parse(const std::vector<std::string>& rows) {
                 case '*':
                 case 'F':
                 case 'C':
+                case 'S':
                 case '1':
                 case '2':
-                case 'B': map.spawns_.push_back({c, x, y}); break;
+                case '!':
+                case '?': map.spawns_.push_back({c, x, y}); break;
                 default: break;  // всё остальное — воздух
             }
         }
@@ -47,6 +49,17 @@ std::optional<Spawn> TileMap::find(char symbol) const {
     return *it;
 }
 
+std::vector<Spawn> TileMap::all(char symbol) const {
+    std::vector<Spawn> found;
+    for (const Spawn& s : spawns_) {
+        if (s.symbol == symbol) found.push_back(s);
+    }
+    std::sort(found.begin(), found.end(), [](const Spawn& a, const Spawn& b) {
+        return a.x != b.x ? a.x < b.x : a.y < b.y;
+    });
+    return found;
+}
+
 Level parseLevel(const std::vector<std::string>& lines) {
     Level level;
     std::vector<std::string> rows;
@@ -61,6 +74,14 @@ Level parseLevel(const std::vector<std::string>& lines) {
                 level.intro = line.substr(7);
                 continue;
             }
+            if (line.rfind("@talk ", 0) == 0) {
+                level.talks.push_back(line.substr(6));
+                continue;
+            }
+            if (line.rfind("@shard ", 0) == 0) {
+                level.shards.push_back(line.substr(7));
+                continue;
+            }
             if (line.empty() || line.front() == ';') continue;
         }
         mapStarted = true;
@@ -70,6 +91,13 @@ Level parseLevel(const std::vector<std::string>& lines) {
     while (!rows.empty() && rows.back().find_first_not_of(" \t") == std::string::npos) rows.pop_back();
     level.map = TileMap::parse(rows);
     if (!level.map.find('P')) throw std::runtime_error("на уровне нет старта игрока 'P'");
+    // Каждой сюжетной точке и каждому осколку нужен свой текст — иначе это ошибка в уровне.
+    if (level.map.all('!').size() != level.talks.size()) {
+        throw std::runtime_error("число «!» на карте не совпадает с числом строк @talk");
+    }
+    if (level.map.all('?').size() != level.shards.size()) {
+        throw std::runtime_error("число «?» на карте не совпадает с числом строк @shard");
+    }
     return level;
 }
 

@@ -38,24 +38,51 @@ TEST_CASE("tilemap: служебные строки уровня") {
     CHECK(level.map.height() == 2);
 }
 
+TEST_CASE("tilemap: сюжетные точки и осколки привязаны к тексту слева направо") {
+    const Level level = parseLevel({
+        "@title Тест",
+        "@talk первый",
+        "@talk второй",
+        "@shard память",
+        "P.!.?.!.",
+        "########",
+    });
+    REQUIRE(level.talks.size() == 2);
+    CHECK(level.talks[0] == "первый");
+    CHECK(level.talks[1] == "второй");
+    REQUIRE(level.shards.size() == 1);
+    const auto points = level.map.all('!');
+    REQUIRE(points.size() == 2);
+    CHECK(points[0].x == 2);
+    CHECK(points[1].x == 6);
+}
+
+TEST_CASE("tilemap: «!» без текста или текст без «!» — ошибка в уровне") {
+    CHECK_THROWS(parseLevel({"@talk лишний", "P...", "####"}));
+    CHECK_THROWS(parseLevel({"P.!.", "####"}));
+    CHECK_THROWS(parseLevel({"P.?.", "####"}));
+}
+
 TEST_CASE("tilemap: уровень без старта — ошибка") {
     CHECK_THROWS(parseLevel({"...", "###"}));
 }
 
-TEST_CASE("tilemap: все уровни игры загружаются") {
+TEST_CASE("tilemap: все уровни игры загружаются, у каждого есть название и финиш") {
     const auto dir = pix::findAssetsDir("") / "levels";
     int count = 0;
     for (const auto& entry : std::filesystem::directory_iterator(dir)) {
         const auto name = entry.path().filename().string();
-        if (name == "terminal.txt" || entry.path().extension() != ".txt") continue;
+        if (name.rfind("terminal", 0) == 0 || entry.path().extension() != ".txt") continue;
         CAPTURE(name);
         const auto text = pix::readTextFile(entry.path());
         REQUIRE(text.has_value());
         const Level level = parseLevel(pix::splitLines(*text));
         CHECK_FALSE(level.title.empty());
+        CHECK_FALSE(level.intro.empty());
         const World world(level.map, PhysicsConfig::crude(), {});
-        CHECK((world.hasFinish() || world.boss().present));
+        CHECK(world.hasFinish());
+        CHECK_FALSE(world.checkpoints().empty());
         ++count;
     }
-    CHECK(count >= 4);
+    CHECK(count == 8);  // 4 уровня стрёмного 2D + 4 красивого
 }

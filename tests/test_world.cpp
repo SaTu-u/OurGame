@@ -1,5 +1,7 @@
 #include "doctest.h"
 
+#include <algorithm>
+
 #include "platformer/World.hpp"
 
 using namespace pix::platformer;
@@ -132,7 +134,7 @@ TEST_CASE("world: шипы ранят, падение в пропасть — с
     CHECK(happened(fall.drainEvents(), EventType::Respawn));
 }
 
-TEST_CASE("world: пиксели, кенты, чекпоинты и финиш") {
+TEST_CASE("world: пиксели, друзья, чекпоинты и финиш") {
     const TileMap map = TileMap::parse({
         "..........",
         "..........",
@@ -147,13 +149,28 @@ TEST_CASE("world: пиксели, кенты, чекпоинты и финиш")
     const auto events = w.drainEvents();
     CHECK(w.pickupsCollected() == 1);
     CHECK(happened(events, EventType::BuddyMet));
-    CHECK(w.abilities().doubleJump);
+    CHECK(w.abilities().doubleJump);  // Алина научила
     CHECK(happened(events, EventType::Checkpoint));
     CHECK(w.completed());
     CHECK(happened(events, EventType::LevelComplete));
 }
 
-TEST_CASE("world: рывок открывается Шейдером и убивает жуков") {
+TEST_CASE("world: друга, которого уже встречали, второй раз не встречаем") {
+    const TileMap map = TileMap::parse({"P.1.2...", "########"});
+    World w(map, PhysicsConfig::crude(), {.doubleJump = true});
+    run(w, 2.f, {.right = true});
+    int met = 0;
+    for (const auto& e : w.drainEvents()) {
+        if (e.type == EventType::BuddyMet) {
+            ++met;
+            CHECK(e.value == 2);  // только Егор
+        }
+    }
+    CHECK(met == 1);
+    CHECK(w.abilities().dash);
+}
+
+TEST_CASE("world: рывок открывается Егором и убивает жуков") {
     const TileMap map = TileMap::parse({
         "..........",
         "P....x....",
@@ -169,35 +186,92 @@ TEST_CASE("world: рывок открывается Шейдером и убив
     CHECK(w.player().hp == 3);
 }
 
-TEST_CASE("world: босс просыпается, падает, и его можно добить") {
-    const TileMap arena = TileMap::parse({
-        "....................",
-        "..........B.........",
-        "....................",
-        "....................",
-        "....................",
-        "....................",
-        "P...................",
-        "####################",
+TEST_CASE("world: пружина подбрасывает выше обычного прыжка") {
+    const TileMap map = TileMap::parse({
+        "......",
+        "......",
+        "......",
+        "......",
+        "......",
+        "......",
+        "......",
+        "P.S...",
+        "######",
     });
-    World w(arena, PhysicsConfig::polished(), {});
-    REQUIRE(w.boss().present);
-    run(w, 0.1f);
-    CHECK(happened(w.drainEvents(), EventType::BossAwake));
-
-    // Имитируем удары: оглушаем босса и прыгаем ему на голову.
-    int guard = 0;
-    while (w.boss().state != BossState::Dead && guard++ < 10) {
-        Boss& b = w.mutableBoss();
-        b.state = BossState::Stunned;
-        b.timer = 5.f;
-        Player& p = w.mutablePlayer();
-        p.invuln = 0.f;
-        p.body.pos = {b.body.center().x - 0.375f, b.body.pos.y - 0.8f};
-        p.body.vel = {0.f, 5.f};
-        run(w, 0.1f);
+    // Обычный прыжок — около 2.8 клетки.
+    World jumper(map, PhysicsConfig::crude(), {});
+    run(jumper, 0.1f);
+    jumper.update(kFixedStep, {.jumpHeld = true, .jumpPressed = true});
+    float jumpTop = jumper.player().body.pos.y;
+    for (int i = 0; i < 120; ++i) {
+        jumper.update(kFixedStep, {.jumpHeld = true});
+        jumpTop = std::min(jumpTop, jumper.player().body.pos.y);
     }
-    CHECK(w.boss().state == BossState::Dead);
+
+    World w(map, PhysicsConfig::crude(), {});
+    run(w, 0.1f);
+    float springTop = w.player().body.pos.y;
+    bool sprung = false;
+    for (int i = 0; i < 240; ++i) {
+        w.update(kFixedStep, {.right = i < 30});
+        springTop = std::min(springTop, w.player().body.pos.y);
+        sprung = sprung || happened(w.drainEvents(), EventType::Spring);
+    }
+    CHECK(sprung);
+    CHECK(springTop < jumpTop - 2.f);  // минимум на две клетки выше
+}
+
+TEST_CASE("world: сюжетная точка срабатывает один раз, даже если перепрыгнуть её сверху") {
+    const TileMap map = TileMap::parse({
+        "........",
+        "....!...",
+        "........",
+        "P.......",
+        "########",
+    });
+    World w(map, PhysicsConfig::crude(), {});
+    run(w, 0.1f);
+    int fired = 0;
+    for (int i = 0; i < 360; ++i) {
+        // Бежим вправо и всё время прыгаем — точка всё равно должна сработать.
+        w.update(kFixedStep, {.right = true, .jumpHeld = true, .jumpPressed = i % 60 == 0});
+        for (const auto& e : w.drainEvents()) {
+            if (e.type == EventType::StoryPoint) {
+                ++fired;
+                CHECK(e.value == 0);
+            }
+        }
+    }
+    CHECK(fired == 1);
+}
+
+TEST_CASE("world: осколок памяти — необязательная находка, мимо можно пройти") {
+    const TileMap map = TileMap::parse({
+        "...?....",
+        "........",
+        "........",
+        "P......F",
+        "########",
+    });
+    // Прошли по земле — осколок остался висеть.
+    World walker(map, PhysicsConfig::crude(), {});
+    run(walker, 2.f, {.right = true});
+    CHECK(walker.completed());
+    CHECK(walker.shardsCollected() == 0);
+
+    // Подпрыгнули под ним — подобрали.
+    World jumper(map, PhysicsConfig::crude(), {});
+    run(jumper, 0.1f);
+    run(jumper, 0.28f, {.right = true});
+    jumper.update(kFixedStep, {.jumpHeld = true, .jumpPressed = true});
+    run(jumper, 0.5f, {.jumpHeld = true});
+    CHECK(jumper.shardsCollected() == 1);
+    CHECK(happened(jumper.drainEvents(), EventType::Shard));
+}
+
+TEST_CASE("world: уровень можно завершить принудительно (режим показа)") {
+    World w(kFlat, PhysicsConfig::crude(), {});
+    CHECK_FALSE(w.completed());
+    w.forceComplete();
     CHECK(w.completed());
-    CHECK(happened(w.drainEvents(), EventType::BossDefeated));
 }

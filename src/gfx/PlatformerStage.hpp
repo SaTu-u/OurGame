@@ -54,7 +54,7 @@ enum class StageResult { Completed, Quit };
 StageResult runPlatformerStage(GameContext& ctx, const StageSetup& setup, PlatformerRenderer& renderer,
                                Progress& progress);
 
-/// Какую секцию сюжета показать при встрече с кентом.
+/// Какую секцию сюжета показать при первой встрече с другом (1 — Алина, 2 — Егор).
 std::string_view buddyStorySection(int buddyId);
 
 }  // namespace pix::gfx

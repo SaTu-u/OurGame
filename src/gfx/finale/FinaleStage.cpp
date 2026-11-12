@@ -6,6 +6,7 @@
 #include <system_error>
 
 #include "core/Credits.hpp"
+#include "core/Dialogue.hpp"
 #include "core/TextFile.hpp"
 
 namespace pix::gfx {
@@ -39,7 +40,11 @@ std::string formatTime(double seconds) {
 class Finale {
 public:
     Finale(GameContext& ctx, const Progress& progress)
-        : ctx_(ctx), progress_(progress), screen_(kW, kH, false), lines_(ctx.story->section("finale")) {
+        : ctx_(ctx),
+          progress_(progress),
+          screen_(kW, kH, false),
+          lines_(ctx.story->section("finale")),
+          epilogue_(ctx.story->section("epilogue"), 34.f) {
         if (auto text = readTextFile(ctx.assets / "credits.txt")) credits_ = parseCredits(*text);
         if (!ctx.noVideo) video_ = findVideo(ctx.assets);
     }
@@ -94,8 +99,18 @@ public:
                         OpenURL(video_->string().c_str());
                         videoOpened = true;
                     }
-                    drawVideoScreen();
-                    if (phaseTime > 0.5f && confirmPressed()) {
+                    bool done = false;
+                    if (video_) {
+                        drawVideoScreen();
+                        done = phaseTime > 0.5f && confirmPressed();
+                    } else {
+                        // Видео ещё не снято — показываем ту же финальную сцену текстом.
+                        epilogue_.update(dt);
+                        if (phaseTime > 0.5f && confirmPressed()) epilogue_.advance();
+                        done = epilogue_.finished();
+                        if (!done) drawEpilogue();
+                    }
+                    if (done) {
                         phase = Phase::Credits;
                         phaseTime = 0.f;
                     }
@@ -164,18 +179,43 @@ private:
     void drawVideoScreen() const {
         ClearBackground({8, 8, 14, 255});
         const float pulse = 0.5f + 0.5f * std::sin(time_ * 3.f);
-        if (video_) {
-            drawTextCentered(ctx_.fonts->title, "Видео открылось в плеере", {kW * 0.5f, kH * 0.3f}, 56.f, 1.f, kText);
-            drawTextCentered(ctx_.fonts->ui, "Пиксель, Глюк и Шейдер вышли в реальность. Посмотри, что было дальше.",
-                             {kW * 0.5f, kH * 0.45f}, 28.f, 1.f, kDim);
-        } else {
-            drawTextCentered(ctx_.fonts->title, "[ здесь будет видео из жизни ]", {kW * 0.5f, kH * 0.3f}, 52.f, 1.f,
-                             kText);
-            drawTextCentered(ctx_.fonts->ui, "Положите ролик в assets/video/finale.mp4 — игра откроет его сама.",
-                             {kW * 0.5f, kH * 0.45f}, 26.f, 1.f, kDim);
-        }
+        drawTextCentered(ctx_.fonts->title, "Видео открылось в плеере", {kW * 0.5f, kH * 0.3f}, 56.f, 1.f, kText);
+        drawTextCentered(ctx_.fonts->ui, "Тимур вернулся в реальный мир. Посмотри, что он сделал первым делом.",
+                         {kW * 0.5f, kH * 0.45f}, 28.f, 1.f, kDim);
         drawTextCentered(ctx_.fonts->ui, "Enter — к титрам", {kW * 0.5f, kH * 0.72f}, 26.f, 1.f,
                          withAlpha(kAccent, 0.4f + 0.6f * pulse));
+    }
+
+    /// Текстовая версия финальной сцены. Реальный мир — светлый: после тёмного неона игры это как выйти на улицу.
+    void drawEpilogue() const {
+        constexpr Color paper{244, 241, 234, 255};
+        constexpr Color ink{34, 32, 44, 255};
+        constexpr Color faded{130, 126, 140, 255};
+        ClearBackground(paper);
+        drawTextCentered(ctx_.fonts->ui, "РЕАЛЬНЫЙ МИР", {kW * 0.5f, 70.f}, 22.f, 8.f, faded);
+
+        const DialogueLine& line = epilogue_.current();
+        Color name = faded;
+        if (line.speaker == "Тимур") name = {40, 110, 190, 255};
+        if (line.speaker == "Алина") name = {30, 150, 90, 255};
+        if (line.speaker == "Егор") name = {210, 120, 20, 255};
+
+        const auto rows = wrapText(ctx_.fonts->ui, epilogue_.visibleText(), 38.f, 1.f, kW - 360.f);
+        const auto fullRows = wrapText(ctx_.fonts->ui, line.text, 38.f, 1.f, kW - 360.f);
+        float y = kH * 0.5f - static_cast<float>(fullRows.size()) * 24.f;
+        if (!line.speaker.empty()) {
+            drawTextCentered(ctx_.fonts->ui, line.speaker, {kW * 0.5f, y - 54.f}, 30.f, 2.f, name);
+        }
+        for (const auto& row : rows) {
+            drawTextCentered(ctx_.fonts->ui, row, {kW * 0.5f, y}, 38.f, 1.f, line.speaker.empty() ? faded : ink);
+            y += 48.f;
+        }
+        if (epilogue_.lineFullyShown()) {
+            const float pulse = 0.5f + 0.5f * std::sin(time_ * 5.f);
+            drawTextCentered(ctx_.fonts->ui, "Enter →", {kW * 0.5f, kH - 130.f}, 24.f, 1.f, withAlpha(ink, 0.4f + 0.5f * pulse));
+        }
+        drawTextCentered(ctx_.fonts->ui, "текстовая версия финала · видео появится здесь, когда его положат в assets/video",
+                         {kW * 0.5f, kH - 50.f}, 18.f, 1.f, withAlpha(faded, 0.7f));
     }
 
     /// Рисует титры со сдвигом scroll. Возвращает их полную высоту (без учёта последней строки).
@@ -190,7 +230,7 @@ private:
         };
 
         line("ИЗ ПИКСЕЛЯ В ЛЮДИ", ctx_.fonts->title, 84.f, kText, 10.f);
-        line("инди-игра, которая выросла вместе с героем", ctx_.fonts->ui, 28.f, kDim, 90.f);
+        line("история о мире, которому стало всё равно, и о тех, кому — нет", ctx_.fonts->ui, 28.f, kDim, 90.f);
 
         for (const CreditSection& section : credits_) {
             if (!section.title.empty()) line(section.title, ctx_.fonts->ui, 26.f, kAccent, 18.f);
@@ -205,6 +245,7 @@ private:
         line("Твоё прохождение", ctx_.fonts->ui, 26.f, kAccent, 18.f);
         line("> бит собрано ....... " + std::to_string(progress_.bits), ctx_.fonts->mono, 28.f, kText, 12.f);
         line("> пикселей собрано .. " + std::to_string(progress_.pixels), ctx_.fonts->mono, 28.f, kText, 12.f);
+        line("> осколков памяти ... " + std::to_string(progress_.shards), ctx_.fonts->mono, 28.f, kText, 12.f);
         line("> смертей ........... " + std::to_string(progress_.deaths), ctx_.fonts->mono, 28.f, kText, 12.f);
         line("> время в игре ...... " + formatTime(progress_.playSeconds), ctx_.fonts->mono, 28.f, kText, 80.f);
 
@@ -219,7 +260,7 @@ private:
         DrawRectangleGradientV(0, 0, kW, 150, {6, 4, 18, 255}, {6, 4, 18, 0});
         DrawRectangleGradientV(0, kH - 190, kW, 190, {40, 14, 60, 0}, {40, 14, 60, 255});
 
-        // Три «пикселя» — герой и кенты — летают внизу экрана.
+        // Три «пикселя» — Тимур, Алина и Егор — летают внизу экрана.
         const Color heroes[] = {{245, 247, 255, 255}, {110, 255, 150, 255}, {255, 190, 90, 255}};
         for (int i = 0; i < 3; ++i) {
             const float x = kW * 0.5f + (static_cast<float>(i) - 1.f) * 90.f;
@@ -233,6 +274,7 @@ private:
     const Progress& progress_;
     VirtualScreen screen_;
     std::vector<DialogueLine> lines_;
+    Dialogue epilogue_;
     std::vector<CreditSection> credits_;
     std::optional<fs::path> video_;
     float time_ = 0.f;

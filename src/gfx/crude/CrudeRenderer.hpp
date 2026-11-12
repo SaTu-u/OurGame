@@ -61,7 +61,7 @@ private:
     mutable std::mt19937 rng_{1337};
     std::vector<Debris> debris_;
     std::vector<Popup> popups_;
-    std::deque<platformer::Vec2> trail_;  ///< путь героя — по нему идут кенты
+    std::deque<platformer::Vec2> trail_;  ///< путь героя — по нему идут друзья
 };
 
 }  // namespace pix::gfx

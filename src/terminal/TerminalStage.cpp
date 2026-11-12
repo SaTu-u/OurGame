@@ -6,12 +6,15 @@
 #include <cstdio>
 #include <deque>
 #include <random>
+#include <stdexcept>
 #include <string_view>
 #include <thread>
 
+#include "core/TextFile.hpp"
 #include "core/Utf8.hpp"
 #include "terminal/Console.hpp"
 #include "terminal/Screen.hpp"
+#include "terminal/Sectors.hpp"
 #include "terminal/TerminalWorld.hpp"
 
 namespace pix::terminal {
@@ -65,17 +68,37 @@ struct Effect {
 
 bool isConfirm(const KeyPress& k) { return k.key == Key::Enter || k.key == Key::Space; }
 
+/// У каждого героя свой цвет реплик — так в терминале сразу видно, кто говорит.
+Style speakerStyle(std::string_view speaker) {
+    if (speaker == "Тимур") return {Color::BrightWhite, Color::Default, true};
+    if (speaker == "Алина") return {Color::BrightGreen, Color::Default, true};
+    if (speaker == "Егор") return {Color::BrightYellow, Color::Default, true};
+    return kAccent;
+}
+
 class TerminalStage {
 public:
-    TerminalStage(const Story& story, const std::vector<std::string>& map, Progress& progress)
-        : story_(story), map_(map), progress_(progress), screen_(kScreenW, kScreenH) {}
+    TerminalStage(const Story& story, const std::filesystem::path& levelsDir, Progress& progress,
+                  const TerminalOptions& options)
+        : story_(story), levelsDir_(levelsDir), progress_(progress), options_(options), screen_(kScreenW, kScreenH) {}
 
     TerminalOutcome run() {
         if (!waitForBigEnoughWindow()) return TerminalOutcome::Quit;
         if (!boot()) return TerminalOutcome::Quit;
-        if (!typeStory(story_.section("terminal_intro"), "ВСТУПЛЕНИЕ")) return TerminalOutcome::Quit;
-        if (!play()) return TerminalOutcome::Quit;
-        if (!typeStory(story_.section("terminal_outro"), "ПОБЕГ")) return TerminalOutcome::Quit;
+
+        const auto& all = sectors();
+        const int count = static_cast<int>(all.size());
+        // progress_.level — номер сектора, с которого продолжаем (после сохранения).
+        for (int i = std::max(0, progress_.level); i < count; ++i) {
+            const Sector& sector = all[static_cast<std::size_t>(i)];
+            const std::string title = "СЕКТОР " + std::to_string(i + 1) + "/" + std::to_string(count) + ": " + sector.title;
+            if (!typeStory(story_.section(sector.intro), title)) return TerminalOutcome::Quit;
+            if (!play(sector, i)) return TerminalOutcome::Quit;
+            progress_.level = i + 1;
+            if (options_.save) options_.save();
+        }
+
+        if (!typeStory(story_.section("terminal_outro"), "РАЗЛОМ")) return TerminalOutcome::Quit;
         installDriver();
         return TerminalOutcome::Escaped;
     }
@@ -202,7 +225,7 @@ private:
                 y = 2;
             }
 
-            screen_.text(2, y, prefix, narrator ? kDim : kAccent);
+            screen_.text(2, y, prefix, narrator ? kDim : speakerStyle(line.speaker));
             const int textX = 2 + static_cast<int>(utf8::length(prefix));
             bool lineSkip = skip;
             for (const auto& part : wrapped) {
@@ -242,8 +265,8 @@ private:
 
     void installDriver() {
         screen_.clear();
-        screen_.text(2, 2, "> Обнаружено устройство: ВИДЕОКАРТА", kAccent);
-        screen_.text(2, 4, "> Установка видеодрайвера pixel_gfx v0.1-beta", kPlain);
+        screen_.text(2, 2, "> Мир вспоминает, что у вещей бывает форма...", kAccent);
+        screen_.text(2, 4, "> Восстановление видеодрайвера pixel_gfx v0.1-beta", kPlain);
         present();
 
         std::mt19937 rng(42);
@@ -258,7 +281,7 @@ private:
             // Драйвер иногда «задумывается» — для достоверности.
             std::this_thread::sleep_for(std::chrono::milliseconds(stall(rng) == 0 ? 220 : 30));
         }
-        screen_.text(2, 7, "> ВНИМАНИЕ: драйвер установлен КРИВО.", kBad);
+        screen_.text(2, 7, "> ВНИМАНИЕ: драйвер восстановлен КРИВО. Мир слишком долго был пустым.", kBad);
         screen_.text(2, 8, "> Графика может выглядеть стрёмно. Мы предупредили.", kWarn);
         present();
         std::this_thread::sleep_for(std::chrono::milliseconds(1200));
@@ -278,20 +301,42 @@ private:
 
     void addEffect(Point p, char32_t ch, Style style, float ttl) { effects_.push_back({p, ch, style, ttl}); }
 
-    TerminalWorld makeWorld() {
+    TerminalWorld makeWorld(const Sector& sector) {
+        const auto text = readTextFile(levelsDir_ / sector.mapFile);
+        if (!text) throw std::runtime_error("не найдена карта сектора " + sector.mapFile);
         const auto seed = static_cast<unsigned>(Clock::now().time_since_epoch().count());
-        return TerminalWorld(map_, Config{}, seed);
+        return TerminalWorld(splitLines(*text), sector.config, seed);
     }
 
-    /// Основной цикл стадии. false — игрок вышел.
-    bool play() {
-        TerminalWorld world = makeWorld();
+    /// Реплики из story.txt попадают в журнал под картой, длинные — переносятся.
+    void say(const std::vector<DialogueLine>& lines) {
+        for (const auto& line : lines) {
+            const std::string text = line.speaker.empty() ? line.text : line.speaker + ": " + line.text;
+            const Style style = line.speaker.empty() ? kAccent : speakerStyle(line.speaker);
+            for (const auto& row : utf8::wrap(text, kScreenW - 4)) log(row, style);
+        }
+    }
+
+    /// Один сектор от появления до портала. false — игрок вышел.
+    bool play(const Sector& sector, int index) {
+        TerminalWorld world = makeWorld(sector);
+        sectorIndex_ = index;
+        sectorTitle_ = sector.title;
         logLines_.clear();
-        log("Ты — пиксель. Ходи стрелками или WASD.", kAccent);
-        log("Собирай биты 0 и 1: восемь бит — это байт.", kPlain);
+        effects_.clear();
+        wipeKillLogged_ = false;
+        if (index == 0) {
+            log("Ты — пиксель. Ходи стрелками или WASD.", kAccent);
+            log("Собирай биты 0 и 1: восемь бит — это байт.", kPlain);
+        } else if (sector.config.visionRadius > 0) {
+            log("Здесь темно. Видно только то, что рядом, — и биты: они светятся.", kAccent);
+        } else {
+            log("Собери " + std::to_string(sector.config.bytesToWin) + " байта и найди портал «>».", kAccent);
+        }
 
         bool paused = false;
         bool hintShown = false;
+        float timeInSector = 0.f;
         auto last = Clock::now();
 
         for (;;) {
@@ -308,10 +353,14 @@ private:
                 if (world.dead()) {
                     if (key->key == Key::Escape) return false;
                     if (key->key == Key::Char && (key->ch == U'r' || key->ch == U'к')) {
-                        world = makeWorld();
+                        world = makeWorld(sector);
                         effects_.clear();
-                        log("Перезагрузка... Пиксель снова светится.", kAccent);
+                        log("Перезагрузка сектора... Ты снова светишься.", kAccent);
                     }
+                    continue;
+                }
+                if (options_.demo && key->key == Key::Char && (key->ch == U'n' || key->ch == U'т')) {
+                    world.forceEscape();
                     continue;
                 }
                 handleKey(world, *key, paused);
@@ -319,20 +368,20 @@ private:
 
             if (!paused) {
                 world.update(dt);
-                timeInStage_ += dt;
+                timeInSector += dt;
                 for (auto& e : effects_) e.ttl -= dt;
                 std::erase_if(effects_, [](const Effect& e) { return e.ttl <= 0.f; });
             }
             for (const Event& event : world.drainEvents()) handleEvent(world, event);
 
-            if (!hintShown && world.time() > 8.f && world.totalBits() == 0) {
+            if (index == 0 && !hintShown && world.time() > 8.f && world.totalBits() == 0) {
                 log("Подсказка: зелёные 0 и 1 — это биты. Просто наступи на них.", kWarn);
                 hintShown = true;
             }
 
             if (world.escaped()) {
                 progress_.bits += world.totalBits();
-                progress_.playSeconds += timeInStage_;
+                progress_.playSeconds += timeInSector;
                 return true;
             }
 
@@ -356,7 +405,7 @@ private:
             if (!world.eraseUnlocked()) log("Backspace пока не работает. Нужен хотя бы 1 байт.", kDim);
             else if (!world.erase()) log("Backspace перезаряжается...", kDim);
         } else if (key.key == Key::Tab) {
-            if (!world.dashUnlocked()) log("Tab пока не работает. Нужно 2 байта.", kDim);
+            if (!world.dashUnlocked()) log("Tab пока не работает. Этот навык откроется позже.", kDim);
             else world.dash();
         }
     }
@@ -372,21 +421,25 @@ private:
                 } else if (e.value == world.config().dashUnlockBytes) {
                     log("+1 БАЙТ! Открыт навык Tab: рывок на 5 клеток сквозь жуков.", kGood);
                 } else {
-                    log("+1 БАЙТ! Пиксель стал ярче и увереннее в себе.", kGood);
+                    log("+1 БАЙТ! Мир вспомнил ещё кусочек себя.", kGood);
+                }
+                // Голос из темноты: после каждого байта кто-то говорит с Тимуром.
+                if (const auto section = voiceSection(sectorIndex_, e.value); story_.has(section)) {
+                    say(story_.section(section));
                 }
                 break;
             case EventType::PortalOpened:
-                log("Где-то открылся портал «>» к видеодрайверу. Беги к нему!", kAccent);
+                log("Где-то открылся портал «>». Беги к нему!", kAccent);
                 break;
             case EventType::Hurt:
                 if (world.brightness() > 0) log("Ай! Жук откусил кусочек яркости.", kBad);
                 break;
-            case EventType::GcHitHero:
-                log("Сборщик мусора принял тебя за мусор! Не стой на месте!", kBad);
+            case EventType::WipeHitHero:
+                log("Обнуление задело тебя! Не стой на месте!", kBad);
                 break;
             case EventType::Died:
                 ++progress_.deaths;
-                log("Пиксель погас...", kBad);
+                log("Тебя стёрло...", kBad);
                 break;
             case EventType::Erased:
                 for (int dy = -2; dy <= 2; ++dy) {
@@ -415,17 +468,17 @@ private:
                 }
                 break;
             }
-            case EventType::GcWarning:
-                log("!!! Через 3 секунды запустится СБОРЩИК МУСОРА. Он удаляет всё, что стоит.", kWarn);
+            case EventType::WipeWarning:
+                log("!!! Через 3 секунды пройдёт ОБНУЛЕНИЕ. Оно стирает всё, что стоит на месте.", kWarn);
                 break;
-            case EventType::GcStarted:
-                log("Сборщик мусора пошёл. ДВИГАЙСЯ!", kWarn);
+            case EventType::WipeStarted:
+                log("Обнуление пошло. ДВИГАЙСЯ!", kWarn);
                 break;
-            case EventType::GcKilledBug:
+            case EventType::WipeKilledBug:
                 addEffect(e.pos, U'x', kWarn, 0.3f);
-                if (!gcKillLogged_) {
-                    log("Сборщик удалил жука. Хоть какая-то польза.", kDim);
-                    gcKillLogged_ = true;
+                if (!wipeKillLogged_) {
+                    log("Обнуление стёрло жука. Ему всё равно, кого стирать.", kDim);
+                    wipeKillLogged_ = true;
                 }
                 break;
             case EventType::Escaped:
@@ -444,10 +497,13 @@ private:
         for (std::size_t i = 0; i < logLines_.size(); ++i) {
             screen_.text(1, kLogY + static_cast<int>(i), "> " + logLines_[i].text, logLines_[i].style);
         }
-        screen_.text(1, kScreenH - 1, "Стрелки/WASD — ходить  Пробел — стереть  Tab — рывок  Esc — пауза", kDim);
+        screen_.text(1, kScreenH - 1,
+                     options_.demo ? "Стрелки/WASD — ходить  Пробел — стереть  Tab — рывок  N — пропустить сектор"
+                                   : "Стрелки/WASD — ходить  Пробел — стереть  Tab — рывок  Esc — пауза",
+                     kDim);
 
         if (world.dead()) {
-            drawDialog({"ПИКСЕЛЬ ПОГАС", "Жуки и сборщик мусора не прощают.", "", "[R] — перезагрузка   [Esc] — выход"}, kBad);
+            drawDialog({"ТЕБЯ СТЁРЛО", "Пустота забирает тех, кто остановился.", "", "[R] — ещё раз   [Esc] — выход"}, kBad);
         } else if (paused) {
             drawDialog({"ПАУЗА", "", "[Esc] — продолжить   [Q] — выйти из игры"}, kAccent);
         }
@@ -460,12 +516,12 @@ private:
         screen_.text(kScreenW - 1 - static_cast<int>(clock.size()), 0, clock, kTitleBar);
 
         const float t = world.time();
-        if (world.gcPhase() == GcPhase::Warning) {
+        if (world.wipePhase() == WipePhase::Warning) {
             const Style st = blink(t, 0.25f) ? Style{Color::Black, Color::BrightYellow, true} : kTitleBar;
-            const std::string text = " СБОРЩИК МУСОРА ЧЕРЕЗ " + std::to_string(static_cast<int>(world.gcTimer()) + 1) + " ";
-            screen_.text(46, 0, text, st);
-        } else if (world.gcPhase() == GcPhase::Sweeping) {
-            screen_.text(46, 0, " ИДЁТ СБОРКА МУСОРА ", {Color::BrightWhite, Color::Red, true});
+            const std::string text = " ОБНУЛЕНИЕ ЧЕРЕЗ " + std::to_string(static_cast<int>(world.wipeTimer()) + 1) + " ";
+            screen_.text(50, 0, text, st);
+        } else if (world.wipePhase() == WipePhase::Sweeping) {
+            screen_.text(50, 0, " ИДЁТ ОБНУЛЕНИЕ ", {Color::BrightWhite, Color::Red, true});
         }
     }
 
@@ -477,6 +533,7 @@ private:
 
         for (int y = 0; y < world.height(); ++y) {
             for (int x = 0; x < world.width(); ++x) {
+                if (!world.visible({x, y})) continue;  // во тьме видно только то, что рядом
                 const Point s = toScreen({x, y});
                 switch (world.cell({x, y})) {
                     case Cell::Wall: screen_.put(s.x, s.y, U'▒', kDim); break;
@@ -503,6 +560,7 @@ private:
         }
 
         for (const Bug& bug : world.bugs()) {
+            if (!world.visible(bug.pos)) continue;
             const Point s = toScreen(bug.pos);
             const int d = world.distanceToHero(bug.pos);
             const bool hunting = d >= 0 && d <= world.config().chaseRadius;
@@ -510,10 +568,10 @@ private:
             screen_.put(s.x, s.y, hunting ? U'Ж' : U'ж', {Color::BrightRed, Color::Default, true});
         }
 
-        if (world.gcPhase() == GcPhase::Sweeping && world.gcColumn() >= 0) {
+        if (world.wipePhase() == WipePhase::Sweeping && world.wipeColumn() >= 0) {
             const char32_t trail[] = {U'█', U'▓', U'▒', U'░'};
             for (int k = 0; k < 4; ++k) {
-                const int x = world.gcColumn() - k;
+                const int x = world.wipeColumn() - k;
                 if (x < 0) continue;
                 for (int y = 0; y < world.height(); ++y) {
                     if (world.cell({x, y}) == Cell::Wall) continue;
@@ -529,7 +587,7 @@ private:
             screen_.put(s.x, s.y, e.ch, e.style);
         }
 
-        // Герой — просто светящаяся клетка. Чем меньше яркости, тем он тусклее.
+        // Тимур — просто светящаяся клетка. Чем меньше яркости, тем он тусклее.
         const bool visible = !world.heroInvulnerable() || blink(t, 0.08f);
         if (visible && !world.dead()) {
             const Color shade = world.brightness() >= 3 ? Color::BrightWhite
@@ -544,7 +602,7 @@ private:
         const Config& cfg = world.config();
         const Style frameStyle = kDim;
         screen_.frame(kPanelX, kMapY, kPanelW, kMapH, frameStyle);
-        screen_.text(kPanelX + 2, kMapY, " ПИКСЕЛЬ ", kAccent);
+        screen_.text(kPanelX + 2, kMapY, " ТИМУР ", kAccent);
 
         const int x = kPanelX + 2;
         int y = kMapY + 2;
@@ -579,10 +637,10 @@ private:
         y += 2;
 
         screen_.text(x, y++, "НАВЫКИ", kAccent);
-        y = drawSkill(x, y, world.eraseUnlocked(), "Пробел: стереть", world.eraseCooldown(), cfg.eraseCooldown,
+        y = drawSkill(x, y, world.eraseUnlocked(), "Стирание", world.eraseCooldown(), cfg.eraseCooldown,
                       "??? 1 байт");
-        y = drawSkill(x, y, world.dashUnlocked(), "Tab: рывок", world.dashCooldown(), cfg.dashCooldown,
-                      "??? 2 байта");
+        y = drawSkill(x, y, world.dashUnlocked(), "Рывок (Tab)", world.dashCooldown(), cfg.dashCooldown,
+                      "??? позже");
         ++y;
 
         screen_.text(x, y++, "ЦЕЛЬ", kAccent);
@@ -591,6 +649,12 @@ private:
         } else {
             screen_.text(x, y, "Собери " + std::to_string(cfg.bytesToWin) + " байта", kPlain);
         }
+
+        // Номер и название сектора — прямо в нижней рамке панели, чтобы не спорить за место с навыками.
+        screen_.text(kPanelX + 1, kMapY + kMapH - 1,
+                     " " + std::to_string(sectorIndex_ + 1) + "/" + std::to_string(sectors().size()) + " " +
+                         sectorTitle_ + " ",
+                     kDim);
     }
 
     int drawSkill(int x, int y, bool unlocked, std::string_view name, float cooldown, float maxCooldown,
@@ -626,8 +690,9 @@ private:
     }
 
     const Story& story_;
-    const std::vector<std::string>& map_;
+    std::filesystem::path levelsDir_;
     Progress& progress_;
+    TerminalOptions options_;
 
     Console console_;
     Screen screen_;
@@ -635,15 +700,17 @@ private:
 
     std::deque<LogLine> logLines_;
     std::vector<Effect> effects_;
-    float timeInStage_ = 0.f;
-    bool gcKillLogged_ = false;
+    int sectorIndex_ = 0;
+    std::string sectorTitle_;
+    bool wipeKillLogged_ = false;
 };
 
 }  // namespace
 
-TerminalOutcome runTerminalStage(const Story& story, const std::vector<std::string>& mapLines, Progress& progress) {
+TerminalOutcome runTerminalStage(const Story& story, const std::filesystem::path& levelsDir, Progress& progress,
+                                 const TerminalOptions& options) {
     if (!Console::isInteractive()) return TerminalOutcome::NotInteractive;
-    TerminalStage stage(story, mapLines, progress);
+    TerminalStage stage(story, levelsDir, progress, options);
     return stage.run();
 }
 

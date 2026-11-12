@@ -61,13 +61,12 @@ private:
     void drawCheckpoints(const platformer::World& world) const;
     void drawPickups(const platformer::World& world) const;
     void drawEnemies(const platformer::World& world) const;
+    void drawSprings(const platformer::World& world) const;
+    void drawShards(const platformer::World& world) const;
     void drawBuddies(const platformer::World& world) const;
-    void drawBoss(const platformer::World& world) const;
-    void drawProjectiles(const platformer::World& world) const;
     void drawFollowers(const platformer::World& world) const;
     void drawPlayer(const platformer::World& world) const;
     void drawHud(const platformer::World& world, const StageView& view) const;
-    void drawBossBar(const platformer::World& world) const;
     void drawLevelTitle(const StageView& view) const;
     void drawDialogue(const Dialogue& dialogue) const;
     void drawPause(int selection) const;
@@ -87,7 +86,6 @@ private:
 
     float squash_ = 0.f;  ///< >0 — героя сплющило при приземлении
     float blinkTimer_ = 3.f;
-    float bossVisor_ = 0.f;
 
     Particles particles_;
     std::vector<Star> stars_;

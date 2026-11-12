@@ -1,19 +1,22 @@
 #include "doctest.h"
 
+#include "core/Story.hpp"
 #include "core/TextFile.hpp"
+#include "terminal/Sectors.hpp"
 #include "terminal/TerminalWorld.hpp"
 
 using namespace pix::terminal;
 
 namespace {
 
-// Маленькая карта без случайностей: ни бит, ни жуков, ни сборщика мусора.
+// Маленькая карта без случайностей: ни бит, ни жуков, ни Обнуления, ходить можно без задержки.
 Config quietConfig() {
     Config c;
+    c.moveInterval = 0.f;
     c.targetBits = 0;
     c.bugsBase = 0;
     c.bugsPerByte = 0;
-    c.firstGcDelay = 1000.f;
+    c.firstWipeDelay = 1000.f;
     return c;
 }
 
@@ -106,22 +109,22 @@ TEST_CASE("terminal: рывок пролетает сквозь жуков и о
     CHECK(w.brightness() == 3);
 }
 
-TEST_CASE("terminal: сборщик мусора наказывает тех, кто стоит без дела") {
+TEST_CASE("terminal: Обнуление стирает тех, кто стоит на месте") {
     Config c = quietConfig();
-    c.firstGcDelay = 1.f;
-    c.gcWarning = 0.1f;
+    c.firstWipeDelay = 1.f;
+    c.wipeWarning = 0.1f;
     c.bugStepBase = c.bugStepMin = 1000.f;  // жук стоит на месте
     TerminalWorld w(kRoom, c);
     w.placeBug({8, 2});
     for (int i = 0; i < 100; ++i) w.update(0.05f);
     CHECK(w.brightness() < 3);  // стоял — получил
-    CHECK(w.bugs().empty());    // жука тоже собрали
+    CHECK(w.bugs().empty());    // жука тоже стёрло
 }
 
-TEST_CASE("terminal: кто двигается — того сборщик не трогает") {
+TEST_CASE("terminal: кто двигается — того Обнуление не трогает") {
     Config c = quietConfig();
-    c.firstGcDelay = 0.1f;
-    c.gcWarning = 0.1f;
+    c.firstWipeDelay = 0.1f;
+    c.wipeWarning = 0.1f;
     TerminalWorld w(kRoom, c);
     for (int i = 0; i < 100; ++i) {
         w.move(i % 2 == 0 ? Dir::Down : Dir::Up);
@@ -141,14 +144,64 @@ TEST_CASE("terminal: три укуса — и пиксель гаснет") {
     CHECK(w.dead());
 }
 
-TEST_CASE("terminal: карта игры корректна — 60x18, есть герой и портал") {
-    const auto text = pix::readTextFile(pix::findAssetsDir("") / "levels" / "terminal.txt");
-    REQUIRE(text.has_value());
-    const auto lines = pix::splitLines(*text);
-    CHECK(lines.size() == 18);
-    for (const auto& l : lines) CHECK(l.size() == 60);
-    TerminalWorld w(lines, Config{}, 7);
-    CHECK(w.bits().size() == static_cast<std::size_t>(Config{}.targetBits));
-    // Портал достижим от старта.
-    CHECK(w.distanceToHero(w.portal()) > 0);
+TEST_CASE("terminal: зажатая клавиша не даёт «телепорт» — шаги ограничены по времени") {
+    Config c = quietConfig();
+    c.moveInterval = 0.1f;
+    TerminalWorld w(kRoom, c);
+    for (int i = 0; i < 5; ++i) w.move(Dir::Right);  // пять нажатий в один момент
+    CHECK(w.hero() == Point{2, 1});                  // сделан только один шаг
+    w.update(0.11f);
+    w.move(Dir::Right);
+    CHECK(w.hero() == Point{3, 1});
+}
+
+TEST_CASE("terminal: во тьме видно только то, что рядом") {
+    Config c = quietConfig();
+    c.visionRadius = 4;
+    TerminalWorld w(kRoom, c);
+    CHECK(w.visible({2, 1}));
+    CHECK(w.visible({5, 1}));
+    CHECK_FALSE(w.visible({8, 1}));
+    CHECK_FALSE(w.visible({1, 4}));
+
+    TerminalWorld bright(kRoom, quietConfig());
+    CHECK(bright.visible({8, 3}));
+}
+
+TEST_CASE("terminal: все секторы игры корректны — карта 60x18, герой, достижимый портал") {
+    const auto& all = sectors();
+    REQUIRE(all.size() == 3);
+    const pix::Story story = pix::Story::loadFile(pix::findAssetsDir("") / "story.txt");
+    int totalBytes = 0;
+    for (std::size_t i = 0; i < all.size(); ++i) {
+        const Sector& sector = all[i];
+        CAPTURE(sector.mapFile);
+        const auto text = pix::readTextFile(pix::findAssetsDir("") / "levels" / sector.mapFile);
+        REQUIRE(text.has_value());
+        const auto lines = pix::splitLines(*text);
+        CHECK(lines.size() == 18);
+        for (const auto& l : lines) CHECK(l.size() == 60);
+
+        TerminalWorld w(lines, sector.config, 7);
+        CHECK(w.bits().size() == static_cast<std::size_t>(sector.config.targetBits));
+        CHECK(w.distanceToHero(w.portal()) > 0);
+        CHECK(story.has(sector.intro));
+        // У каждого байта в каждом секторе есть реплика «голоса».
+        for (int b = 1; b <= sector.config.bytesToWin; ++b) CHECK(story.has(voiceSection(static_cast<int>(i), b)));
+        totalBytes += sector.config.bytesToWin;
+    }
+    CHECK(totalBytes == 8);  // «восемь байт» упоминаются в сюжете
+
+    // Навыки открываются по ходу стадии: стирание — в первом секторе, рывок — во втором.
+    CHECK(all[0].config.eraseUnlockBytes == 1);
+    CHECK(all[0].config.dashUnlockBytes > all[0].config.bytesToWin);
+    CHECK(all[1].config.dashUnlockBytes <= all[1].config.bytesToWin);
+    CHECK(all[2].config.visionRadius > 0);
+}
+
+TEST_CASE("terminal: сектор можно завершить принудительно (режим показа)") {
+    TerminalWorld w(kRoom, quietConfig());
+    CHECK_FALSE(w.escaped());
+    w.forceEscape();
+    CHECK(w.escaped());
 }

@@ -22,6 +22,7 @@ struct GameContext {
     const Fonts* fonts = nullptr;
     std::function<void()> save;  ///< сохранить прогресс на диск
     bool noVideo = false;
+    bool demo = false;  ///< режим показа: клавиша N пропускает уровень
 };
 
 /// Виртуальный экран фиксированного размера. Стадия рисует в него,

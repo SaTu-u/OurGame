@@ -35,6 +35,7 @@ add_library(ptp_core STATIC
     src/core/Story.cpp
     src/core/TextFile.cpp
     src/core/Utf8.cpp
+    src/terminal/Sectors.cpp
     src/terminal/TerminalWorld.cpp
     src/platformer/Physics.cpp
     src/platformer/TileMap.cpp
