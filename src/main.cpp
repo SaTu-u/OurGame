@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "core/Options.hpp"
+#include "core/Platform.hpp"
 #include "core/Progress.hpp"
 #include "core/Story.hpp"
 #include "core/TextFile.hpp"
@@ -75,9 +76,9 @@ void growWindow(WindowSize from, WindowSize to) {
 
 class Game {
 public:
-    Game(const Options& options, const char* exePath)
+    explicit Game(const Options& options)
         : options_(options),
-          assets_(findAssetsDir(exePath ? exePath : "")),
+          assets_(findAssetsDir()),
           savePath_(assets_.parent_path() / "save.txt"),
           story_(Story::loadFile(assets_ / "story.txt")) {
         if (options_.startStage) {
@@ -85,8 +86,9 @@ public:
         } else if (auto saved = options_.fresh ? std::nullopt : loadProgress(savePath_)) {
             progress_ = *saved;
             if (progress_.stage != StageId::Terminal) {
-                std::printf("Продолжаем с сохранения: стадия %d. Начать заново: --new\n",
-                            static_cast<int>(progress_.stage));
+                platform::writeConsole("Продолжаем с сохранения: стадия " +
+                                       std::to_string(static_cast<int>(progress_.stage)) +
+                                       ". Начать заново: --new\n");
             }
         }
     }
@@ -102,7 +104,7 @@ public:
 private:
     void save() {
         if (!saveProgress(progress_, savePath_)) {
-            std::fprintf(stderr, "Не удалось сохранить прогресс в %s\n", savePath_.string().c_str());
+            platform::writeConsole("Не удалось сохранить прогресс в save.txt\n", true);
         }
     }
 
@@ -116,6 +118,7 @@ private:
     bool runTerminal() {
         terminal::TerminalOptions terminalOptions;
         terminalOptions.demo = options_.demo;
+        terminalOptions.classicConsole = options_.classicConsole;
         terminalOptions.save = [this] { save(); };
 
         switch (terminal::runTerminalStage(story_, assets_ / "levels", progress_, terminalOptions)) {
@@ -123,12 +126,13 @@ private:
                 save();
                 return false;
             case terminal::TerminalOutcome::NotInteractive:
-                std::printf("Стадия 1 работает только в настоящем терминале.\n"
-                            "Запусти игру из консоли (cmd, PowerShell, Terminal), чтобы сыграть за пиксель.\n"
-                            "А пока — сразу в графический режим...\n");
+                platform::writeConsole(
+                    "Стадия 1 работает только в настоящем терминале.\n"
+                    "Запусти игру из консоли (cmd, PowerShell, Terminal), чтобы сыграть за пиксель.\n"
+                    "А пока — сразу в графический режим...\n");
                 break;
             case terminal::TerminalOutcome::Escaped:
-                std::printf("Мир вспомнил форму. Не закрывай эту консоль — с неё всё началось.\n");
+                platform::writeConsole("Мир вспомнил форму. Не закрывай эту консоль — с неё всё началось.\n");
                 break;
         }
         advanceTo(StageId::Crude);
@@ -221,19 +225,35 @@ private:
 
 int main(int argc, char** argv) {
     terminal::prepareConsoleOutput();
+    // Любая непойманная беда — тоже с понятным сообщением, а не мгновенно закрывшимся окном.
+    std::set_terminate([] {
+        platform::reportFatalError("непредвиденный сбой (std::terminate)");
+        std::abort();
+    });
+
     std::vector<std::string> args(argv + 1, argv + argc);
     const Options options = parseOptions(args);
     if (options.showHelp || !options.errors.empty()) {
-        for (const auto& e : options.errors) std::fprintf(stderr, "Ошибка: %s\n", e.c_str());
-        std::printf("%s", usageText().c_str());
+        for (const auto& e : options.errors) platform::writeConsole("Ошибка: " + e + "\n", true);
+        platform::writeConsole(usageText());
         return options.errors.empty() ? 0 : 1;
     }
 
+    // Переходим в папку с игрой: дальше все пути относительные (assets/...) и не содержат
+    // русских букв, даже если игра лежит в C:\Users\Тимур\Загрузки.
+    if (!platform::enterGameDirectory()) {
+        platform::reportFatalError(
+            "рядом с игрой нет папки assets.\n"
+            "  Распакуй архив ЦЕЛИКОМ в обычную папку и запусти pixel_to_people.exe оттуда.\n"
+            "  Если запускать exe прямо из zip, Windows достаёт только сам exe, без уровней и шрифтов.");
+        return 1;
+    }
+
     try {
-        Game game(options, argc > 0 ? argv[0] : nullptr);
+        Game game(options);
         return game.run();
     } catch (const std::exception& e) {
-        std::fprintf(stderr, "Игра упала: %s\n", e.what());
+        platform::reportFatalError(e.what());
         return 1;
     }
 }

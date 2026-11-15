@@ -22,7 +22,7 @@ constexpr int kStepsPerAction = 10;  // одно «решение» бота д�
 constexpr int kMaxExpansions = 600000;
 
 std::string levelText(const char* file) {
-    const auto text = pix::readTextFile(pix::findAssetsDir("") / "levels" / file);
+    const auto text = pix::readTextFile(pix::findAssetsDir() / "levels" / file);
     REQUIRE(text.has_value());
     return *text;
 }

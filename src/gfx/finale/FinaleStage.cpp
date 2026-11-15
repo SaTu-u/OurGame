@@ -7,6 +7,7 @@
 
 #include "core/Credits.hpp"
 #include "core/Dialogue.hpp"
+#include "core/Platform.hpp"
 #include "core/TextFile.hpp"
 
 namespace pix::gfx {
@@ -25,7 +26,7 @@ std::optional<fs::path> findVideo(const fs::path& assets) {
     std::error_code ec;
     for (const char* ext : {".mp4", ".mov", ".mkv", ".webm", ".avi"}) {
         const fs::path candidate = assets / "video" / (std::string("finale") + ext);
-        if (fs::exists(candidate, ec)) return fs::absolute(candidate, ec).make_preferred();
+        if (fs::exists(candidate, ec)) return candidate;
     }
     return std::nullopt;
 }
@@ -96,7 +97,7 @@ public:
                 case Phase::Video: {
                     if (!videoOpened && video_) {
                         // Игра «вырывается» из своего окна: видео открывается в обычном плеере системы.
-                        OpenURL(video_->string().c_str());
+                        platform::openWithDefaultApp(*video_);
                         videoOpened = true;
                     }
                     bool done = false;

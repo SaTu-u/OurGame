@@ -16,6 +16,8 @@ Options parseOptions(const std::vector<std::string>& args) {
             options.noVideo = true;
         } else if (arg == "--demo") {
             options.demo = true;
+        } else if (arg == "--classic-console") {
+            options.classicConsole = true;
         } else if (arg == "--level" || arg == "-l") {
             if (i + 1 >= args.size()) {
                 options.errors.push_back("после --level нужен номер уровня (с 1)");
@@ -63,6 +65,7 @@ std::string usageText() {
            "  --demo       режим показа: клавиша N пропускает уровень\n"
            "  --new        начать заново, не загружая сохранение\n"
            "  --no-video   не открывать финальное видео\n"
+           "  --classic-console  если в консоли вместо игры видна каша из символов [0;90;49m\n"
            "  --help       показать эту справку\n";
 }
 

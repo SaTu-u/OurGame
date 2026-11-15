@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <vector>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -10,7 +11,6 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-#include <conio.h>
 #include <io.h>
 #include <windows.h>
 #else
@@ -19,7 +19,9 @@
 #include <unistd.h>
 #endif
 
+#include "core/Platform.hpp"
 #include "core/Utf8.hpp"
+#include "terminal/Screen.hpp"
 
 namespace pix::terminal {
 
@@ -117,7 +119,7 @@ bool Console::isInteractive() {
            GetConsoleMode(GetStdHandle(STD_OUTPUT_HANDLE), &mode) != 0;
 }
 
-Console::Console() {
+Console::Console(bool allowAnsi) {
     HANDLE in = GetStdHandle(STD_INPUT_HANDLE);
     HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
     GetConsoleMode(in, &gOldInMode);
@@ -129,17 +131,33 @@ Console::Console() {
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
     // ANSI-последовательности (цвета, перемещение курсора) — есть в Windows 10+.
-    SetConsoleMode(out, gOldOutMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING | ENABLE_PROCESSED_OUTPUT);
+    // Если консоль их не умеет (старая Windows или «старый режим» консоли), рисуем через WinAPI.
+    DWORD mode = 0;
+    ansi_ = allowAnsi &&
+            SetConsoleMode(out, gOldOutMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING | ENABLE_PROCESSED_OUTPUT) != 0 &&
+            GetConsoleMode(out, &mode) != 0 && (mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING) != 0;
     // Ctrl+C приходит как обычная клавиша, а не убивает игру с неубранным терминалом.
     SetConsoleMode(in, gOldInMode & ~static_cast<DWORD>(ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT));
 
-    write(kEnter);
-    flush();
+    if (ansi_) {
+        write(kEnter);
+        flush();
+    } else {
+        CONSOLE_CURSOR_INFO cursor{1, FALSE};  // прячем мигающий курсор: «курсор» здесь — герой
+        SetConsoleCursorInfo(out, &cursor);
+        clear();
+    }
 }
 
 Console::~Console() {
-    write(kLeave);
-    flush();
+    if (ansi_) {
+        write(kLeave);
+        flush();
+    } else {
+        clear();
+        CONSOLE_CURSOR_INFO cursor{25, TRUE};
+        SetConsoleCursorInfo(GetStdHandle(STD_OUTPUT_HANDLE), &cursor);
+    }
     SetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), gOldInMode);
     SetConsoleMode(GetStdHandle(STD_OUTPUT_HANDLE), gOldOutMode);
     SetConsoleOutputCP(gOldOutCp);
@@ -147,19 +165,34 @@ Console::~Console() {
 }
 
 std::optional<KeyPress> Console::poll() {
-    if (!_kbhit()) return std::nullopt;
-    const wint_t c = _getwch();
-    if (c == 0 || c == 0xE0) {
-        // Стрелки приходят двумя кодами: префикс и номер клавиши.
-        switch (_getwch()) {
-            case 72: return KeyPress{Key::Up, 0};
-            case 80: return KeyPress{Key::Down, 0};
-            case 75: return KeyPress{Key::Left, 0};
-            case 77: return KeyPress{Key::Right, 0};
-            default: return KeyPress{Key::None, 0};
+    // Читаем события клавиатуры напрямую: так стрелки и русские буквы
+    // приходят одинаково в любой консоли Windows (cmd, PowerShell, Windows Terminal).
+    HANDLE in = GetStdHandle(STD_INPUT_HANDLE);
+    for (;;) {
+        DWORD pending = 0;
+        if (!GetNumberOfConsoleInputEvents(in, &pending) || pending == 0) return std::nullopt;
+        INPUT_RECORD record{};
+        DWORD read = 0;
+        if (!ReadConsoleInputW(in, &record, 1, &read) || read == 0) return std::nullopt;
+        if (record.EventType != KEY_EVENT || !record.Event.KeyEvent.bKeyDown) continue;
+
+        const KEY_EVENT_RECORD& key = record.Event.KeyEvent;
+        switch (key.wVirtualKeyCode) {
+            case VK_UP: return KeyPress{Key::Up, 0};
+            case VK_DOWN: return KeyPress{Key::Down, 0};
+            case VK_LEFT: return KeyPress{Key::Left, 0};
+            case VK_RIGHT: return KeyPress{Key::Right, 0};
+            case VK_ESCAPE: return KeyPress{Key::Escape, 0};
+            case VK_RETURN: return KeyPress{Key::Enter, 0};
+            case VK_TAB: return KeyPress{Key::Tab, 0};
+            case VK_BACK: return KeyPress{Key::Backspace, 0};
+            case VK_SPACE: return KeyPress{Key::Space, 0};
+            default: break;
         }
+        const wchar_t ch = key.uChar.UnicodeChar;
+        if (ch == 0) continue;  // Shift, Ctrl, F1 и прочие клавиши без символа
+        return fromChar(static_cast<char32_t>(ch));
     }
-    return fromChar(static_cast<char32_t>(c));
 }
 
 ConsoleSize Console::size() const {
@@ -168,11 +201,82 @@ ConsoleSize Console::size() const {
     return {info.srWindow.Right - info.srWindow.Left + 1, info.srWindow.Bottom - info.srWindow.Top + 1};
 }
 
+void Console::clear() {
+    if (ansi_) {
+        write("\x1b[0m\x1b[2J\x1b[H");
+        flush();
+        return;
+    }
+    HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+    CONSOLE_SCREEN_BUFFER_INFO info{};
+    if (!GetConsoleScreenBufferInfo(out, &info)) return;
+    const DWORD cells = static_cast<DWORD>(info.dwSize.X) * static_cast<DWORD>(info.dwSize.Y);
+    DWORD written = 0;
+    FillConsoleOutputCharacterW(out, L' ', cells, {0, 0}, &written);
+    FillConsoleOutputAttribute(out, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE, cells, {0, 0}, &written);
+    SetConsoleCursorPosition(out, info.srWindow.Left == 0 && info.srWindow.Top == 0 ? COORD{0, 0}
+                                                                                     : COORD{info.srWindow.Left, info.srWindow.Top});
+}
+
+namespace {
+
+/// Цвет из нашей палитры → атрибут консоли Windows (4 бита: синий, зелёный, красный, яркость).
+WORD consoleColor(Color c, bool background) {
+    WORD value = 0;
+    switch (c) {
+        case Color::Default: value = background ? 0 : 7; break;
+        case Color::Black: value = 0; break;
+        case Color::Red: value = 4; break;
+        case Color::Green: value = 2; break;
+        case Color::Yellow: value = 6; break;
+        case Color::Blue: value = 1; break;
+        case Color::Magenta: value = 5; break;
+        case Color::Cyan: value = 3; break;
+        case Color::White: value = 7; break;
+        case Color::Gray: value = 8; break;
+        case Color::BrightRed: value = 12; break;
+        case Color::BrightGreen: value = 10; break;
+        case Color::BrightYellow: value = 14; break;
+        case Color::BrightBlue: value = 9; break;
+        case Color::BrightMagenta: value = 13; break;
+        case Color::BrightCyan: value = 11; break;
+        case Color::BrightWhite: value = 15; break;
+    }
+    return background ? static_cast<WORD>(value << 4) : value;
+}
+
+}  // namespace
+
+void Console::blit(const Screen& screen, int originX, int originY) {
+    HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+    CONSOLE_SCREEN_BUFFER_INFO info{};
+    if (!GetConsoleScreenBufferInfo(out, &info)) return;
+
+    const int w = screen.width();
+    const int h = screen.height();
+    std::vector<CHAR_INFO> cells(static_cast<std::size_t>(w * h));
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            const Glyph& g = screen.at(x, y);
+            CHAR_INFO& c = cells[static_cast<std::size_t>(y * w + x)];
+            c.Char.UnicodeChar = g.ch <= 0xFFFF ? static_cast<WCHAR>(g.ch) : L'?';
+            WORD fg = consoleColor(g.style.fg, false);
+            if (g.style.bold && fg < 8) fg |= FOREGROUND_INTENSITY;
+            c.Attributes = static_cast<WORD>(fg | consoleColor(g.style.bg, true));
+        }
+    }
+    // Координаты — в буфере консоли, а видимое окно может быть прокручено.
+    const auto left = static_cast<SHORT>(info.srWindow.Left + originX);
+    const auto top = static_cast<SHORT>(info.srWindow.Top + originY);
+    SMALL_RECT region{left, top, static_cast<SHORT>(left + w - 1), static_cast<SHORT>(top + h - 1)};
+    WriteConsoleOutputW(out, cells.data(), {static_cast<SHORT>(w), static_cast<SHORT>(h)}, {0, 0}, &region);
+}
+
 #else  // Linux / macOS
 
 bool Console::isInteractive() { return ::isatty(STDIN_FILENO) && ::isatty(STDOUT_FILENO); }
 
-Console::Console() {
+Console::Console(bool /*allowAnsi*/) {
     if (::tcgetattr(STDIN_FILENO, &gOldTermios) == 0) {
         gTermiosSaved = true;
         termios raw = gOldTermios;
@@ -232,6 +336,13 @@ std::optional<KeyPress> Console::poll() {
     return consume(len, fromChar(decoded.empty() ? U'\0' : decoded[0]));
 }
 
+void Console::clear() {
+    write("\x1b[0m\x1b[2J\x1b[H");
+    flush();
+}
+
+void Console::blit(const Screen&, int, int) {}  // в Linux и macOS терминал всегда понимает ANSI
+
 ConsoleSize Console::size() const {
     winsize ws{};
     if (::ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) != 0 || ws.ws_col == 0) return {};
@@ -244,8 +355,7 @@ void Console::write(std::string_view text) { out_.append(text); }
 
 void Console::flush() {
     if (out_.empty()) return;
-    std::fwrite(out_.data(), 1, out_.size(), stdout);
-    std::fflush(stdout);
+    platform::writeConsole(out_);
     out_.clear();
 }
 

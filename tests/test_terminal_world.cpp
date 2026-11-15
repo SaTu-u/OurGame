@@ -171,12 +171,12 @@ TEST_CASE("terminal: во тьме видно только то, что рядо
 TEST_CASE("terminal: все секторы игры корректны — карта 60x18, герой, достижимый портал") {
     const auto& all = sectors();
     REQUIRE(all.size() == 3);
-    const pix::Story story = pix::Story::loadFile(pix::findAssetsDir("") / "story.txt");
+    const pix::Story story = pix::Story::loadFile(pix::findAssetsDir() / "story.txt");
     int totalBytes = 0;
     for (std::size_t i = 0; i < all.size(); ++i) {
         const Sector& sector = all[i];
         CAPTURE(sector.mapFile);
-        const auto text = pix::readTextFile(pix::findAssetsDir("") / "levels" / sector.mapFile);
+        const auto text = pix::readTextFile(pix::findAssetsDir() / "levels" / sector.mapFile);
         REQUIRE(text.has_value());
         const auto lines = pix::splitLines(*text);
         CHECK(lines.size() == 18);

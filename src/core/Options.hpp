@@ -18,6 +18,7 @@ struct Options {
     bool fresh = false;                 ///< --new: игнорировать сохранение
     bool showHelp = false;              ///< --help
     bool noVideo = false;               ///< --no-video: не открывать видео в финале
+    bool classicConsole = false;        ///< --classic-console: консоль без цветовых ANSI-кодов
     std::vector<std::string> errors;
 };
 

@@ -19,6 +19,7 @@ enum class TerminalOutcome {
 
 struct TerminalOptions {
     bool demo = false;           ///< режим показа: клавиша N пропускает сектор
+    bool classicConsole = false; ///< рисовать без ANSI-последовательностей (старые консоли Windows)
     std::function<void()> save;  ///< сохранить прогресс (вызывается после каждого сектора)
 };
 

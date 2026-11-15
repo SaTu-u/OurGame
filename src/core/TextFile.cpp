@@ -1,6 +1,7 @@
 #include "core/TextFile.hpp"
 
-#include <array>
+#include "core/Platform.hpp"
+
 #include <fstream>
 #include <sstream>
 #include <system_error>
@@ -43,20 +44,17 @@ std::vector<std::string> splitLines(std::string_view text) {
     return lines;
 }
 
-fs::path findAssetsDir(std::string_view exePath) {
+fs::path findAssetsDir() {
     std::error_code ec;
-    std::vector<fs::path> roots;
-    if (!exePath.empty()) roots.push_back(fs::absolute(fs::path(exePath), ec).parent_path());
-    roots.push_back(fs::current_path(ec));
-
-    for (const auto& root : roots) {
-        fs::path dir = root;
-        for (int depth = 0; depth < 4 && !dir.empty(); ++depth) {
-            const auto candidate = dir / "assets";
-            if (fs::exists(candidate / "story.txt", ec)) return candidate;
-            if (!dir.has_parent_path() || dir.parent_path() == dir) break;
-            dir = dir.parent_path();
-        }
+    // Сначала относительно текущей папки — так путь останется относительным.
+    fs::path relative = "assets";
+    for (int depth = 0; depth < 4; ++depth) {
+        if (fs::exists(relative / "story.txt", ec)) return relative;
+        relative = ".." / relative;
+    }
+    // Потом рядом с exe (main обычно уже перешёл туда через platform::enterGameDirectory).
+    if (const fs::path exeDir = platform::executableDir(); !exeDir.empty()) {
+        if (fs::exists(exeDir / "assets" / "story.txt", ec)) return exeDir / "assets";
     }
 #ifdef PTP_SOURCE_ASSETS
     // Запасной вариант для разработки: папка assets из исходников.

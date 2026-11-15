@@ -48,5 +48,16 @@ TEST_CASE("options: аргументы командной строки") {
     CHECK(demo.demo);
 
     CHECK_FALSE(parseOptions({"--level", "2"}).errors.empty());  // без --stage нельзя
+    CHECK(parseOptions({"--classic-console"}).classicConsole);
     CHECK_FALSE(parseOptions({"--stage", "2", "--level", "0"}).errors.empty());
+}
+
+#include "core/TextFile.hpp"
+
+TEST_CASE("assets ищутся относительным путём — без русских букв из пути к игре") {
+    // В Windows путь вида C:\Users\Тимур\... нельзя отдавать raylib узкой строкой.
+    // Поэтому, если папка assets нашлась рядом с текущей, путь к ней должен быть относительным.
+    const auto dir = findAssetsDir();
+    CHECK(std::filesystem::exists(dir / "story.txt"));
+    CHECK(dir.is_relative());
 }

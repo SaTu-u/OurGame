@@ -68,7 +68,7 @@ TEST_CASE("tilemap: уровень без старта — ошибка") {
 }
 
 TEST_CASE("tilemap: все уровни игры загружаются, у каждого есть название и финиш") {
-    const auto dir = pix::findAssetsDir("") / "levels";
+    const auto dir = pix::findAssetsDir() / "levels";
     int count = 0;
     for (const auto& entry : std::filesystem::directory_iterator(dir)) {
         const auto name = entry.path().filename().string();

@@ -17,8 +17,9 @@ bool writeTextFile(const std::filesystem::path& path, std::string_view text);
 /// Делит текст на строки, понимает и \n, и \r\n (файлы, сохранённые в Windows).
 std::vector<std::string> splitLines(std::string_view text);
 
-/// Ищет папку assets: рядом с exe, в текущей папке и на пару уровней выше.
-/// exePath — argv[0], может быть пустым.
-std::filesystem::path findAssetsDir(std::string_view exePath);
+/// Ищет папку assets: в текущей папке, на пару уровней выше и рядом с exe.
+/// Если нашлась относительно текущей папки — возвращает относительный путь (assets, ../assets):
+/// в нём нет русских букв, и его безопасно отдавать raylib даже в Windows.
+std::filesystem::path findAssetsDir();
 
 }  // namespace pix

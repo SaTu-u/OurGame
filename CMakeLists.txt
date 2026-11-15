@@ -31,6 +31,7 @@ add_library(ptp_core STATIC
     src/core/Credits.cpp
     src/core/Dialogue.cpp
     src/core/Options.cpp
+    src/core/Platform.cpp
     src/core/Progress.cpp
     src/core/Story.cpp
     src/core/TextFile.cpp
@@ -44,6 +45,9 @@ add_library(ptp_core STATIC
 target_include_directories(ptp_core PUBLIC src)
 target_link_libraries(ptp_core PUBLIC ptp_options)
 target_compile_definitions(ptp_core PRIVATE PTP_SOURCE_ASSETS="${CMAKE_SOURCE_DIR}/assets")
+if(WIN32)
+    target_link_libraries(ptp_core PUBLIC shell32)  # ShellExecuteW — открыть финальное видео
+endif()
 
 # ------------------------------------------------------------------ терминал (стадия 1)
 add_library(ptp_terminal STATIC

@@ -37,7 +37,7 @@ TEST_CASE("story: неизвестная секция даёт видимую з
 }
 
 TEST_CASE("story: в story.txt есть все секции, которые вызывает код") {
-    const Story story = Story::loadFile(findAssetsDir("") / "story.txt");
+    const Story story = Story::loadFile(findAssetsDir() / "story.txt");
     for (const char* name : {"terminal_intro", "terminal_outro", "meet_alina", "meet_egor", "crude_outro",
                              "pretty_outro", "finale", "epilogue", "credits_thanks"}) {
         CAPTURE(name);
@@ -46,10 +46,10 @@ TEST_CASE("story: в story.txt есть все секции, которые вы
 }
 
 TEST_CASE("story: у каждого разговора и осколка на уровнях есть текст") {
-    const Story story = Story::loadFile(findAssetsDir("") / "story.txt");
+    const Story story = Story::loadFile(findAssetsDir() / "story.txt");
     int talks = 0;
     int shards = 0;
-    for (const auto& entry : std::filesystem::directory_iterator(findAssetsDir("") / "levels")) {
+    for (const auto& entry : std::filesystem::directory_iterator(findAssetsDir() / "levels")) {
         const auto name = entry.path().filename().string();
         if (name.rfind("terminal", 0) == 0 || entry.path().extension() != ".txt") continue;
         const auto level = platformer::parseLevel(splitLines(*readTextFile(entry.path())));
@@ -71,7 +71,7 @@ TEST_CASE("story: у каждого разговора и осколка на у
 }
 
 TEST_CASE("story: главные герои — Тимур, Алина и Егор") {
-    const Story story = Story::loadFile(findAssetsDir("") / "story.txt");
+    const Story story = Story::loadFile(findAssetsDir() / "story.txt");
     const auto speaks = [&](const char* section, const char* who) {
         for (const auto& line : story.section(section)) {
             if (line.speaker == who) return true;

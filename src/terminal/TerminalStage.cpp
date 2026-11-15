@@ -80,7 +80,12 @@ class TerminalStage {
 public:
     TerminalStage(const Story& story, const std::filesystem::path& levelsDir, Progress& progress,
                   const TerminalOptions& options)
-        : story_(story), levelsDir_(levelsDir), progress_(progress), options_(options), screen_(kScreenW, kScreenH) {}
+        : story_(story),
+          levelsDir_(levelsDir),
+          progress_(progress),
+          options_(options),
+          console_(!options.classicConsole),
+          screen_(kScreenW, kScreenH) {}
 
     TerminalOutcome run() {
         if (!waitForBigEnoughWindow()) return TerminalOutcome::Quit;
@@ -109,14 +114,18 @@ private:
     void present() {
         const ConsoleSize size = console_.size();
         if (size.cols != lastSize_.cols || size.rows != lastSize_.rows) {
-            console_.write("\x1b[0m\x1b[2J");
+            console_.clear();
             screen_.invalidate();
             lastSize_ = size;
         }
         const int ox = std::max(0, (size.cols - kScreenW) / 2);
         const int oy = std::max(0, (size.rows - kScreenH) / 2);
-        console_.write(screen_.diff(ox, oy));
-        console_.flush();
+        if (console_.supportsAnsi()) {
+            console_.write(screen_.diff(ox, oy));
+            console_.flush();
+        } else {
+            console_.blit(screen_, ox, oy);  // консоль без ANSI — рисуем средствами Windows
+        }
     }
 
     void sleepFrame() { std::this_thread::sleep_for(kFrame); }
@@ -126,7 +135,7 @@ private:
         for (;;) {
             const ConsoleSize size = console_.size();
             if (size.cols >= kScreenW && size.rows >= kScreenH) return true;
-            console_.write("\x1b[0m\x1b[2J\x1b[H");
+            console_.clear();
             console_.write("Окно терминала слишком маленькое: " + std::to_string(size.cols) + "x" +
                            std::to_string(size.rows) + ".\r\n");
             console_.write("Растяни его хотя бы до 80x24 (или уменьши шрифт).\r\n");
