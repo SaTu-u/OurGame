@@ -1,13 +1,13 @@
 name: ClaudeBridge
-version: '1.0.0'
+version: '1.1.0'
 main: dev.claudebridge.ClaudeBridgePlugin
 api-version: '26.2'
 description: HTTP API for remote server administration and an in-world AI avatar
 authors: [Claude]
 commands:
   claudebridge:
-    description: Manage ClaudeBridge (status, on, off, token, reload, despawn)
-    usage: /<command> <status|on|off|token|reload|despawn>
+    description: Manage ClaudeBridge (status, on, off, token, tls, reload, despawn)
+    usage: /<command> <status|on|off|token|tls|reload|despawn>
     permission: claudebridge.admin
     aliases: [cbridge]
 permissions:

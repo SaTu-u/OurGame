@@ -7,6 +7,7 @@ import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.plugin.java.JavaPlugin;
 
+import javax.net.ssl.SSLContext;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -65,13 +66,35 @@ public final class ClaudeBridgePlugin extends JavaPlugin {
     private void startApi() {
         String bind = getConfig().getString("http.bind", "127.0.0.1");
         int port = getConfig().getInt("http.port", 8765);
+        boolean local = "127.0.0.1".equals(bind) || "localhost".equalsIgnoreCase(bind) || "::1".equals(bind);
+        IpAllowList allowList = new IpAllowList(getConfig().getStringList("http.allowed-ips"));
+        for (String p : allowList.problems()) getLogger().severe("http.allowed-ips: " + p + " (all requests will be rejected until fixed)");
+
+        SSLContext tls = null;
+        if (getConfig().getBoolean("http.tls.enabled", false)) {
+            try {
+                TlsSupport.Loaded loaded = TlsSupport.loadOrCreate(getDataFolder().toPath(), getConfig().getStringList("http.tls.hosts"));
+                tls = loaded.context();
+                getLogger().info("HTTPS certificate: " + serverRoot.relativize(loaded.pemFile().toAbsolutePath())
+                        + " (SHA-256 " + TlsSupport.fingerprint(loaded.certificate()) + ")");
+            } catch (Exception e) {
+                getLogger().log(Level.SEVERE, "Could not set up HTTPS; the API is NOT started", e);
+                return;
+            }
+        }
+
         api = new ApiServer(this);
         Routes.register(this, api);
         try {
-            api.start(bind, port);
-            getLogger().info("ClaudeBridge API listening on http://" + bind + ":" + port + " (token: plugins/ClaudeBridge/token.txt)");
-            if (!"127.0.0.1".equals(bind) && !"localhost".equalsIgnoreCase(bind)) {
-                getLogger().warning("API is bound to " + bind + ". Expose it to the internet only through an HTTPS reverse proxy.");
+            api.start(bind, port, tls, allowList.isEmpty() ? null : allowList);
+            getLogger().info("ClaudeBridge API listening on " + (tls != null ? "https" : "http") + "://" + bind + ":" + port
+                    + (allowList.isEmpty() ? "" : ", allowed clients: " + allowList)
+                    + " (token: plugins/ClaudeBridge/token.txt)");
+            if (!local && tls == null) {
+                getLogger().warning("API is reachable from the network WITHOUT encryption. Set http.tls.enabled: true.");
+            }
+            if (!local && allowList.isEmpty()) {
+                getLogger().warning("API accepts requests from any IP. Set http.allowed-ips to your reverse proxy address.");
             }
         } catch (IOException e) {
             getLogger().log(Level.SEVERE, "Could not start ClaudeBridge API on " + bind + ":" + port, e);
@@ -190,7 +213,18 @@ public final class ClaudeBridgePlugin extends JavaPlugin {
                 avatar.despawn();
                 sender.sendMessage(Component.text("Аватар убран из мира.", NamedTextColor.GREEN));
             }
-            default -> sender.sendMessage(Component.text("Использование: /" + label + " <status|on|off|token|reload|despawn>", NamedTextColor.GRAY));
+            case "tls" -> {
+                try {
+                    TlsSupport.reset(getDataFolder().toPath());
+                    restartApi();
+                    audit.log("console", "CMD", "/claudebridge tls", sender.getName());
+                    sender.sendMessage(Component.text("Создан новый HTTPS-сертификат: plugins/ClaudeBridge/" + TlsSupport.CERT_PEM
+                            + ". Скопируйте его на веб-сервер заново.", NamedTextColor.GREEN));
+                } catch (IOException e) {
+                    sender.sendMessage(Component.text("Не удалось пересоздать сертификат: " + e.getMessage(), NamedTextColor.RED));
+                }
+            }
+            default -> sender.sendMessage(Component.text("Использование: /" + label + " <status|on|off|token|tls|reload|despawn>", NamedTextColor.GRAY));
         }
         return true;
     }
@@ -199,7 +233,7 @@ public final class ClaudeBridgePlugin extends JavaPlugin {
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
         List<String> out = new ArrayList<>();
         if (args.length == 1) {
-            for (String s : List.of("status", "on", "off", "token", "reload", "despawn")) {
+            for (String s : List.of("status", "on", "off", "token", "tls", "reload", "despawn")) {
                 if (s.startsWith(args[0].toLowerCase())) out.add(s);
             }
         }

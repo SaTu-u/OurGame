@@ -19,7 +19,7 @@ Claude (облако) --HTTPS:443--> Caddy/nginx на вашем сервере 
 
 ## Установка
 
-1. Скопируйте `dist/ClaudeBridge-1.0.0.jar` в `plugins/` и перезапустите сервер.
+1. Скопируйте `dist/ClaudeBridge-1.1.0.jar` в `plugins/` и перезапустите сервер.
 2. Плагин создаст `plugins/ClaudeBridge/config.yml` и `plugins/ClaudeBridge/token.txt` со случайным 256-битным токеном.
 3. API слушает **только** `127.0.0.1:8765`. Не открывайте этот порт в интернет.
 
@@ -31,23 +31,75 @@ curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8765/api/status
 
 ## Открыть доступ для Claude (HTTPS)
 
-Нужен домен с действующим сертификатом на порту **443**, потому что прокси облака не работает с другими портами. Проще всего это сделать через [Caddy](https://caddyserver.com): он сам получит сертификат Let's Encrypt.
+Claude может обращаться только к домену с действующим сертификатом на порту **443**, потому что прокси облака не работает с другими портами. Этот домен обслуживает ваш веб-сервер (Caddy или nginx), а он уже передаёт запросы плагину.
 
-`/etc/caddy/Caddyfile`:
+### Вариант A: Minecraft и веб-сервер на одной машине (VPS)
+
+Плагин остаётся на `127.0.0.1:8765`. Проще всего настроить [Caddy](https://caddyserver.com): он сам получит сертификат Let's Encrypt.
 ```
 mc.dee47.ru {
     reverse_proxy 127.0.0.1:8765
 }
 ```
 
-Чтобы это заработало:
-- DNS-запись `mc.dee47.ru` должна указывать на эту машину;
-- порты 80 и 443 должны быть открыты;
-- порт 443 не должен быть занят сайтом.
+### Вариант B: Minecraft на игровом хостинге, веб-сервер на другой машине
 
-Если 443 уже занят, используйте поддомен, например `bridge.dee47.ru`, и сообщите Claude новое имя: его нужно будет добавить в allowlist.
+Между веб-сервером и хостингом запросы идут через интернет. Поэтому плагин принимает их **только по HTTPS** со своим сертификатом, который веб-сервер проверяет (pinning), и **только с IP вашего веб-сервера**.
 
-На игровых хостингах без root-доступа поставить Caddy нельзя, там нужен VPS или выделенный сервер.
+1. **Выделите дополнительный порт** в панели хостинга. Например, в Pterodactyl это делается в разделе Network → Create allocation. Дальше он обозначен как `PORT`.
+
+2. **Замените jar** на `ClaudeBridge-1.1.0.jar` и удалите старый `plugins/ClaudeBridge/config.yml`, чтобы появились новые настройки. Затем в новом `config.yml` укажите:
+   ```yaml
+   http:
+     bind: 0.0.0.0
+     port: PORT            # порт из шага 1
+     tls:
+       enabled: true
+     allowed-ips: ["IP_ВЕБ_СЕРВЕРА"]   # узнать на веб-сервере: curl -4 ifconfig.me
+   ```
+
+3. **Перезапустите сервер.** В консоли должны появиться две строки:
+   - `HTTPS certificate: plugins/ClaudeBridge/tls-cert.pem (SHA-256 …)`;
+   - `ClaudeBridge API listening on https://0.0.0.0:PORT, allowed clients: [...]`.
+
+4. **Скопируйте сертификат.** Скачайте `plugins/ClaudeBridge/tls-cert.pem` через файловый менеджер панели и положите на веб-сервер, например в `/etc/caddy/claudebridge.pem`. Это публичный сертификат, не секрет.
+
+5. **Настройте веб-сервер**, подставив `PORT`.
+
+   Caddy:
+   ```
+   mc.dee47.ru {
+       reverse_proxy https://87.228.74.140:PORT {
+           transport http {
+               tls_trust_pool file /etc/caddy/claudebridge.pem
+               tls_server_name claudebridge.local
+           }
+       }
+   }
+   ```
+   В Caddy старше 2.9 вместо `tls_trust_pool file …` пишется `tls_trusted_ca_certs /etc/caddy/claudebridge.pem`.
+
+   nginx (сертификат для `mc.dee47.ru` выпускается через `certbot --nginx -d mc.dee47.ru`):
+   ```
+   server {
+       listen 443 ssl;
+       server_name mc.dee47.ru;
+       location / {
+           proxy_pass https://87.228.74.140:PORT;
+           proxy_ssl_verify on;
+           proxy_ssl_trusted_certificate /etc/nginx/claudebridge.pem;
+           proxy_ssl_name claudebridge.local;
+           proxy_ssl_server_name on;
+           proxy_set_header X-Forwarded-For $remote_addr;
+       }
+   }
+   ```
+
+6. **Проверьте с веб-сервера:** `curl https://mc.dee47.ru/api`. Правильный ответ — `{"error":"unauthorized: ..."}`: без токена API должен отказывать.
+
+Если выпустили новый сертификат командой `/claudebridge tls`, повторите шаг 4.
+
+Если хостинг не даёт дополнительный порт, скажите Claude: тогда плагину нужен другой режим, в котором он сам подключается к вашему веб-серверу.
 
 ## Как передать токен Claude
 
@@ -65,6 +117,7 @@ mc.dee47.ru {
 | `/claudebridge status` | состояние API и аватара |
 | `/claudebridge on` / `off` | включить или выключить API |
 | `/claudebridge token` | выпустить новый токен |
+| `/claudebridge tls` | выпустить новый HTTPS-сертификат (потом заново скопируйте `tls-cert.pem` на веб-сервер) |
 | `/claudebridge reload` | перечитать конфиг и перезапустить API |
 | `/claudebridge despawn` | убрать аватара |
 
@@ -112,6 +165,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" -d '{"message":"Привет! 
 ## Безопасность
 
 - Токен 256 бит, сравнивается за постоянное время. Неверные попытки замедляются и пишутся в журнал.
+- На хостинге: встроенный HTTPS с сертификатом, который проверяет веб-сервер, плюс `allowed-ips`. Проверяется реальный IP соединения, а не заголовок `X-Forwarded-For`, который можно подделать. Если в списке ошибка, плагин отклоняет все запросы.
 - Каждый запрос пишется в `plugins/ClaudeBridge/audit.log`: время, IP, путь и параметры, включая текст команд.
 - Файлы доступны только на чтение и только внутри папки сервера: выход наружу через `..` и симлинки заблокирован. Закрыть отдельные папки можно через `files.deny`.
 - Базы только на чтение. Для MySQL лучше завести пользователя с одними правами SELECT.

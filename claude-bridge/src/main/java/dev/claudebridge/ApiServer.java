@@ -9,6 +9,10 @@ import com.google.gson.JsonParseException;
 import com.google.gson.JsonParser;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import com.sun.net.httpserver.HttpsConfigurator;
+import com.sun.net.httpserver.HttpsServer;
+
+import javax.net.ssl.SSLContext;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -146,6 +150,7 @@ final class ApiServer {
     private final Map<String, Route> routes = new LinkedHashMap<>();
     private HttpServer server;
     private ExecutorService pool;
+    private IpAllowList allowList;
 
     ApiServer(ClaudeBridgePlugin plugin) {
         this.plugin = plugin;
@@ -167,8 +172,15 @@ final class ApiServer {
         return out;
     }
 
-    void start(String bind, int port) throws IOException {
-        server = HttpServer.create(new InetSocketAddress(bind, port), 64);
+    void start(String bind, int port, SSLContext tls, IpAllowList allowList) throws IOException {
+        this.allowList = allowList;
+        if (tls != null) {
+            HttpsServer https = HttpsServer.create(new InetSocketAddress(bind, port), 64);
+            https.setHttpsConfigurator(new HttpsConfigurator(tls));
+            server = https;
+        } else {
+            server = HttpServer.create(new InetSocketAddress(bind, port), 64);
+        }
         pool = Executors.newFixedThreadPool(8, runnable -> {
             Thread t = new Thread(runnable, "ClaudeBridge-HTTP");
             t.setDaemon(true);
@@ -196,6 +208,11 @@ final class ApiServer {
         final String path = rawPath.length() > 1 && rawPath.endsWith("/") ? rawPath.substring(0, rawPath.length() - 1) : rawPath;
         String remote = remoteOf(ex);
         try {
+            if (allowList != null && ex.getRemoteAddress() != null && !allowList.allows(ex.getRemoteAddress().getAddress())) {
+                plugin.audit().log(remote, method, path, "BLOCKED: address is not in http.allowed-ips");
+                send(ex, 403, error("forbidden"));
+                return;
+            }
             if (!plugin.isApiEnabled()) {
                 send(ex, 503, error("API is disabled on the server (/claudebridge on)"));
                 return;
