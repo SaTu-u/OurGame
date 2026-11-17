@@ -14,6 +14,7 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 /**
@@ -61,12 +62,26 @@ final class SshTunnel {
             ch.setCommand(command);
             InputStream out = ch.getInputStream();
             InputStream err = ch.getExtInputStream();
-            ch.connect(30_000);
-            Thread errReader = new Thread(() -> pump(err, output), "ClaudeBridge-ssh-stderr");
-            errReader.setDaemon(true);
-            errReader.start();
-            pump(out, output);
-            while (ch.isConnected() && s.isConnected()) Thread.sleep(500);
+            daemon("ClaudeBridge-ssh-stdout", () -> pump(out, output));
+            daemon("ClaudeBridge-ssh-stderr", () -> pump(err, output));
+            // Some services (localhost.run) never answer the exec request. OpenSSH does not wait for that answer,
+            // JSch does (and gives up with "channel request: timeout"), so the request is sent from a helper thread
+            // while the service's output (with the public address) is already being read.
+            AtomicReference<Exception> openError = new AtomicReference<>();
+            Thread opener = daemon("ClaudeBridge-ssh-open", () -> {
+                try {
+                    ch.connect(0);
+                } catch (Exception e) {
+                    openError.set(e);
+                }
+            });
+            long started = System.currentTimeMillis();
+            while (s.isConnected()) {
+                Exception e = openError.get();
+                if (e != null) throw new IOException("the tunnel service refused the session: " + e.getMessage(), e);
+                if (!ch.isConnected() && !opener.isAlive() && System.currentTimeMillis() - started > 5_000) break;
+                Thread.sleep(500);
+            }
             int code = ch.getExitStatus();
             throw new IOException("the tunnel service closed the session" + (code >= 0 ? " (exit status " + code + ")" : ""));
         } finally {
@@ -78,6 +93,13 @@ final class SshTunnel {
     void stop() {
         Session s = session;
         if (s != null) s.disconnect();
+    }
+
+    private static Thread daemon(String name, Runnable r) {
+        Thread t = new Thread(r, name);
+        t.setDaemon(true);
+        t.start();
+        return t;
     }
 
     private static void pump(InputStream in, Consumer<String> output) {

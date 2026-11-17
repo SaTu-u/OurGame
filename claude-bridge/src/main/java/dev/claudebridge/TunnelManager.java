@@ -163,7 +163,9 @@ final class TunnelManager {
                 if (msg.contains("Auth fail") || msg.contains("Auth cancel")) {
                     hint = provider.equals("tuna-ssh") ? " Add the SSH public key shown above in your tuna.am dashboard."
                             : " If use-key is true, register the public key at https://admin.localhost.run or set use-key: false.";
-                } else if (msg.contains("timeout") || msg.contains("timed out") || msg.contains("Connection refused") || msg.contains("UnknownHost")) {
+                } else if (msg.contains("socket is not established") || msg.contains("connect timed out") || msg.contains("Connection refused")
+                        || msg.contains("UnknownHost") || msg.contains("No route to host")) {
+                    // Only when the TCP/SSH connection itself failed, not when a later step timed out.
                     hint = " The hosting may block outgoing SSH (port 22).";
                 }
                 plugin.getLogger().warning("Tunnel: " + (wasOnline ? "connection lost" : "could not connect") + ": " + msg + "." + hint
