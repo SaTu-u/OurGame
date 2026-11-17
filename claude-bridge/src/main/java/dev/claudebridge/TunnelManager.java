@@ -52,7 +52,8 @@ final class TunnelManager {
 
     TunnelManager(ClaudeBridgePlugin plugin) {
         this.plugin = plugin;
-        this.dataDir = plugin.getDataFolder().toPath();
+        // Absolute: the agent is started with its own working directory, so a relative program path would not resolve.
+        this.dataDir = plugin.getDataFolder().toPath().toAbsolutePath().normalize();
     }
 
     void start(int localPort, boolean localTls) {
@@ -116,7 +117,7 @@ final class TunnelManager {
         long backoff = 10_000L;
         while (running) {
             try {
-                Path bin = ensureBinary();
+                Path bin = ensureBinary().toAbsolutePath().normalize();
                 List<String> cmd = command(bin, target, localTls);
                 ProcessBuilder pb = new ProcessBuilder(cmd).redirectErrorStream(true).directory(bin.getParent().toFile());
                 Path home = dataDir.resolve("bin").resolve("home");
@@ -236,7 +237,7 @@ final class TunnelManager {
     private Path ensureBinary() throws Exception {
         String custom = plugin.getConfig().getString("tunnel.binary", "").trim();
         if (!custom.isEmpty()) {
-            Path p = plugin.serverRoot().resolve(custom).normalize();
+            Path p = plugin.serverRoot().resolve(custom).toAbsolutePath().normalize();
             if (!Files.isRegularFile(p)) throw new IOException("tunnel.binary " + p + " does not exist");
             p.toFile().setExecutable(true);
             return p;
