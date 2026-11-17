@@ -39,7 +39,8 @@ final class TunnelManager {
 
     private static final Pattern CLOUDFLARE_URL = Pattern.compile("https://[a-z0-9-]+\\.trycloudflare\\.com");
     private static final Pattern NGROK_URL = Pattern.compile("https://[a-zA-Z0-9.-]+\\.ngrok(?:-free)?\\.(?:app|dev|io)");
-    private static final Pattern LHR_HOST = Pattern.compile("(?<![a-z0-9.-])([a-z0-9][a-z0-9-]*\\.lhr\\.(?:life|rocks))");
+    private static final Pattern LHR_HOST = Pattern.compile(
+            "(?<![a-z0-9.-])((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+lhr\\.(?:life|rocks|pro))(?![a-z0-9-])");
     private static final Pattern TUNA_HOST = Pattern.compile("(?<![a-z0-9.-])([a-z0-9][a-z0-9-]*\\.[a-z]{2}\\.tuna\\.am)");
 
     private final ClaudeBridgePlugin plugin;
@@ -132,31 +133,24 @@ final class TunnelManager {
                 publicUrl = null;
                 connected = false;
                 plugin.getLogger().info("Tunnel: connecting to " + host + ":" + port + " over SSH for http://127.0.0.1:" + localPort);
-                long[] lastForward = {0};
-                t.run(line -> {
-                    remember(line);
-                    String url = extractUrl(provider, line);
-                    if (url != null && !url.equals(publicUrl)) {
-                        publicUrl = url;
-                        connected = true;
-                        state = "online";
-                        try {
-                            Files.writeString(dataDir.resolve("tunnel-url.txt"), url + System.lineSeparator(), StandardCharsets.UTF_8);
-                        } catch (IOException ignored) {
-                            // the address is in the log anyway
-                        }
-                        plugin.getLogger().info("Tunnel ready: " + url
-                                + "  (give this address to the AI; it is also saved in plugins/ClaudeBridge/tunnel-url.txt)");
-                    } else if (!connected && System.currentTimeMillis() - lastForward[0] > 15_000L) {
-                        lastForward[0] = System.currentTimeMillis();
-                        plugin.getLogger().info("Tunnel service: " + (line.length() > 240 ? line.substring(0, 240) + "..." : line));
-                    }
-                });
+                SshSession st = new SshSession();
+                currentSsh = st;
+                try {
+                    t.run(line -> onSshLine(st, line), msg -> {
+                        if (msg.startsWith("SSH problem")) plugin.getLogger().warning("Tunnel: " + msg);
+                        else plugin.getLogger().info("Tunnel: " + msg);
+                    }, () -> abortReason(st));
+                } finally {
+                    st.active = false;
+                    if (st.hadUrl) backoff = 10_000L;
+                }
             } catch (Exception e) {
                 if (!running) break;
-                boolean wasOnline = connected;
+                SshSession last = currentSsh;
+                boolean wasOnline = connected || (last != null && last.hadUrl);
                 publicUrl = null;
                 connected = false;
+                check = null;
                 String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
                 state = "disconnected: " + msg;
                 String hint = "";
@@ -181,6 +175,182 @@ final class TunnelManager {
             }
             backoff = Math.min(backoff * 2, 300_000L);
         }
+    }
+
+    /** One SSH connection to the tunnel service. */
+    private static final class SshSession {
+        final long started = System.currentTimeMillis();
+        volatile boolean active = true;
+        volatile boolean hadUrl;
+        volatile long removedAt;
+        volatile String abortReason;
+        int logged;
+    }
+
+    private volatile SshSession currentSsh;
+    private volatile String check;
+
+    private void onSshLine(SshSession st, String line) {
+        remember(line);
+        if (st.logged < 80) {
+            st.logged++;
+            plugin.getLogger().info("Tunnel service: " + (line.length() > 2000 ? line.substring(0, 2000) + "..." : line));
+            if (st.logged == 80) plugin.getLogger().info("Tunnel: further messages from the service are not shown");
+        }
+        LhrEvent ev = provider.equals("localhostrun") ? lhrEvent(line) : null;
+        if (ev != null && ev.removal()) {
+            String gone = ev.host() == null ? null : "https://" + ev.host();
+            String current = publicUrl;
+            if (current == null || gone == null || gone.equals(current)) {
+                publicUrl = null;
+                connected = false;
+                check = null;
+                st.removedAt = System.currentTimeMillis();
+                String what = gone == null ? "the tunnel" : gone;
+                state = "the service removed " + what + ", waiting for a new address";
+                plugin.getLogger().warning("Tunnel: the service removed " + what
+                        + ". Waiting for a new address; reconnecting in 20 s if none comes.");
+            }
+            return;
+        }
+        String url = ev != null && ev.host() != null ? "https://" + ev.host() : extractUrl(provider, line);
+        if (url == null || url.equals(publicUrl)) return;
+        boolean replacing = st.hadUrl;
+        publicUrl = url;
+        connected = true;
+        st.hadUrl = true;
+        st.removedAt = 0;
+        state = "online";
+        try {
+            Files.writeString(dataDir.resolve("tunnel-url.txt"), url + System.lineSeparator(), StandardCharsets.UTF_8);
+        } catch (IOException ignored) {
+            // the address is in the log anyway
+        }
+        plugin.getLogger().info("Tunnel ready: " + url + (replacing ? "  (NEW address, the old one no longer works)" : "")
+                + "  (give this address to the AI; it is also saved in plugins/ClaudeBridge/tunnel-url.txt)");
+        startSelfCheck(st, url);
+    }
+
+    private String abortReason(SshSession st) {
+        if (st.abortReason != null) return st.abortReason;
+        long now = System.currentTimeMillis();
+        if (publicUrl == null && st.removedAt > 0 && now - st.removedAt > 20_000L) return "the service removed the tunnel and gave no new address";
+        if (publicUrl == null && st.removedAt == 0 && now - st.started > 90_000L) return "the service gave no public address within 90 s";
+        return null;
+    }
+
+    /**
+     * Opens the public address from the server itself: proves that the tunnel really reaches the API, and replaces a
+     * session whose address worked and then stopped answering. Failures before the first success are only reported:
+     * some hostings cannot open their own public address, which does not mean that others cannot.
+     */
+    private void startSelfCheck(SshSession st, String url) {
+        if (!plugin.getConfig().getBoolean("tunnel.self-check", true)) return;
+        Thread th = new Thread(() -> {
+            HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15))
+                    .followRedirects(HttpClient.Redirect.NEVER).build();
+            Boolean last = null;
+            boolean everOk = false;
+            int fails = 0;
+            long delay = 3_000L;
+            while (running && st.active && url.equals(publicUrl)) {
+                try {
+                    Thread.sleep(delay);
+                } catch (InterruptedException e) {
+                    return;
+                }
+                delay = 60_000L;
+                if (!(running && st.active && url.equals(publicUrl))) return;
+                String problem = probe(http, url);
+                if (problem == null) {
+                    check = "ok";
+                    if (!Boolean.TRUE.equals(last)) plugin.getLogger().info("Tunnel check: " + url + " answers, the tunnel works.");
+                    last = true;
+                    everOk = true;
+                    fails = 0;
+                } else {
+                    check = "failing: " + problem;
+                    fails++;
+                    if (!Boolean.FALSE.equals(last)) {
+                        plugin.getLogger().warning("Tunnel check: " + url + " did not answer from this server (" + problem + "). "
+                                + (everOk ? "Reconnecting if this continues."
+                                : "The hosting may not be able to open its own public address; it can still work from outside."));
+                    }
+                    last = false;
+                    if (everOk && fails >= 3) {
+                        st.abortReason = "the public address stopped answering";
+                        return;
+                    }
+                }
+            }
+        }, "ClaudeBridge-tunnel-check");
+        th.setDaemon(true);
+        th.start();
+    }
+
+    private static String probe(HttpClient http, String url) {
+        try {
+            HttpResponse<String> r = http.send(HttpRequest.newBuilder(URI.create(url + "/health"))
+                    .timeout(Duration.ofSeconds(20)).header("User-Agent", "ClaudeBridge-selfcheck").GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            if (r.statusCode() == 200 && r.body().contains(ApiServer.INSTANCE_ID)) return null;
+            String body = r.body() == null ? "" : r.body().strip().replaceAll("\\s+", " ");
+            return "HTTP " + r.statusCode() + (body.isEmpty() ? "" : ": " + (body.length() > 120 ? body.substring(0, 120) + "..." : body));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return "interrupted";
+        } catch (Exception e) {
+            return e.getClass().getSimpleName() + (e.getMessage() == null ? "" : ": " + e.getMessage());
+        }
+    }
+
+    /** One message of `ssh ... localhost.run -- --output json` (CloudEvents: type, subject = tunnel domain, data). */
+    record LhrEvent(String type, String host, boolean removal) {
+    }
+
+    static LhrEvent lhrEvent(String rawLine) {
+        String t = rawLine.trim();
+        if (!t.startsWith("{")) return null;
+        JsonObject o;
+        try {
+            JsonElement e = JsonParser.parseString(t);
+            if (!e.isJsonObject()) return null;
+            o = e.getAsJsonObject();
+        } catch (RuntimeException e) {
+            return null;
+        }
+        String type = string(o, "type");
+        if (type == null) type = string(o, "event");
+        String host = null;
+        String subject = string(o, "subject");
+        if (subject != null) host = lhrHost(subject);
+        if (host == null && o.has("data")) host = lhrHost(cleanEscapes(o.get("data").toString()));
+        if (host == null) host = lhrHost(cleanEscapes(t));
+        String lower = type == null ? "" : type.toLowerCase(Locale.ROOT);
+        // Only the tunnel itself (e.g. run.localhost.tunnel.removed), not events about single HTTP connections.
+        boolean removal = lower.contains("tunnel") && (lower.endsWith("removed") || lower.endsWith("deleted") || lower.endsWith("closed")
+                || lower.endsWith("expired") || lower.endsWith("stopped") || lower.endsWith("down"));
+        return new LhrEvent(type, host, removal);
+    }
+
+    private static String string(JsonObject o, String key) {
+        JsonElement e = o.get(key);
+        return e != null && e.isJsonPrimitive() ? e.getAsString() : null;
+    }
+
+    /** First localhost.run tunnel domain in the text: any name under lhr.life / lhr.rocks / lhr.pro, e.g. 33a8deeca0b657.app.lhr.life. */
+    static String lhrHost(String text) {
+        Matcher m = LHR_HOST.matcher(text.toLowerCase(Locale.ROOT));
+        while (m.find()) {
+            String h = m.group(1);
+            if (h.startsWith("admin.") || h.startsWith("www.") || h.startsWith("docs.")) continue;
+            return h;
+        }
+        return null;
+    }
+
+    private static String cleanEscapes(String raw) {
+        return raw.replaceAll("\\\\u001[bB]\\[[0-9;?]*[ -/]*[@-~]", " ").replaceAll("\u001B\\[[0-9;?]*[ -/]*[@-~]", " ");
     }
 
     void stop() {
@@ -220,6 +390,7 @@ final class TunnelManager {
         m.put("state", state);
         m.put("url", publicUrl);
         m.put("connected", connected);
+        if (check != null) m.put("check", check);
         return m;
     }
 
@@ -368,8 +539,8 @@ final class TunnelManager {
         String line = rawLine.replaceAll("\\\\u001[bB]\\[[0-9;?]*[ -/]*[@-~]", " ")
                 .replaceAll("\u001B\\[[0-9;?]*[ -/]*[@-~]", " ");
         if (provider.equals("localhostrun")) {
-            Matcher m = LHR_HOST.matcher(line);
-            return m.find() ? "https://" + m.group(1) : null;
+            String h = lhrHost(line);
+            return h == null ? null : "https://" + h;
         }
         if (provider.equals("tuna") || provider.equals("tuna-ssh")) {
             Matcher m = TUNA_HOST.matcher(line);

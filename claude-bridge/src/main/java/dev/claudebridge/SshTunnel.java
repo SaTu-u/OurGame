@@ -3,7 +3,9 @@ package dev.claudebridge;
 import com.jcraft.jsch.ChannelExec;
 import com.jcraft.jsch.JSch;
 import com.jcraft.jsch.KeyPair;
+import com.jcraft.jsch.Logger;
 import com.jcraft.jsch.Session;
+import com.jcraft.jsch.SocketFactory;
 import com.jcraft.jsch.UIKeyboardInteractive;
 import com.jcraft.jsch.UserInfo;
 
@@ -11,11 +13,16 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 /**
  * Reverse SSH tunnel inside the JVM (no external program): connects to a tunnel service such as localhost.run or
@@ -43,8 +50,14 @@ final class SshTunnel {
         this.command = command;
     }
 
-    void run(Consumer<String> output) throws Exception {
+    /**
+     * @param output the service's messages (they contain the public address)
+     * @param diag   diagnostics from the SSH library and about connections arriving through the tunnel
+     * @param abort  polled twice a second; a non-null answer ends the session with that reason
+     */
+    void run(Consumer<String> output, Consumer<String> diag, Supplier<String> abort) throws Exception {
         JSch jsch = new JSch();
+        jsch.setInstanceLogger(new DiagLogger(diag));
         if (privateKey != null) jsch.addIdentity(privateKey.toString());
         Session s = jsch.getSession(user, host, port);
         // Tunnel services rotate host keys behind load balancers; the API itself is protected by its own token.
@@ -57,7 +70,7 @@ final class SshTunnel {
         try {
             s.connect(30_000);
             // Same as `ssh -R <remotePort>:localhost:<localPort>`: the service forwards its public address to us.
-            s.setPortForwardingR("localhost", remotePort, "127.0.0.1", localPort);
+            s.setPortForwardingR("localhost", remotePort, "127.0.0.1", localPort, new CountingSocketFactory(diag));
             ChannelExec ch = (ChannelExec) s.openChannel("exec");
             ch.setCommand(command);
             InputStream out = ch.getInputStream();
@@ -80,6 +93,8 @@ final class SshTunnel {
                 Exception e = openError.get();
                 if (e != null) throw new IOException("the tunnel service refused the session: " + e.getMessage(), e);
                 if (!ch.isConnected() && !opener.isAlive() && System.currentTimeMillis() - started > 5_000) break;
+                String reason = abort.get();
+                if (reason != null) throw new IOException(reason);
                 Thread.sleep(500);
             }
             int code = ch.getExitStatus();
@@ -189,6 +204,64 @@ final class SshTunnel {
             String[] answers = new String[prompt == null ? 0 : prompt.length];
             java.util.Arrays.fill(answers, "");
             return answers;
+        }
+    }
+
+    /** Reports the first connections the service opens through the tunnel (proves that traffic reaches the API). */
+    private static final class CountingSocketFactory implements SocketFactory {
+        private final Consumer<String> diag;
+        private final AtomicInteger count = new AtomicInteger();
+
+        CountingSocketFactory(Consumer<String> diag) {
+            this.diag = diag;
+        }
+
+        @Override
+        public Socket createSocket(String host, int port) throws IOException {
+            int n = count.incrementAndGet();
+            Socket socket = new Socket();
+            try {
+                socket.connect(new InetSocketAddress(host, port), 10_000);
+            } catch (IOException e) {
+                diag.accept("a connection came through the tunnel but the local API at " + host + ":" + port + " did not accept it: " + e);
+                socket.close();
+                throw e;
+            }
+            if (n <= 3) diag.accept("connection #" + n + " came through the tunnel and was handed to the API");
+            return socket;
+        }
+
+        @Override
+        public InputStream getInputStream(Socket socket) throws IOException {
+            return socket.getInputStream();
+        }
+
+        @Override
+        public OutputStream getOutputStream(Socket socket) throws IOException {
+            return socket.getOutputStream();
+        }
+    }
+
+    /** Passes on what the SSH library reports about problems and about why a session ended. */
+    private static final class DiagLogger implements Logger {
+        private final Consumer<String> diag;
+
+        DiagLogger(Consumer<String> diag) {
+            this.diag = diag;
+        }
+
+        @Override
+        public boolean isEnabled(int level) {
+            return level >= INFO;
+        }
+
+        @Override
+        public void log(int level, String message) {
+            if (message == null || message.startsWith("Permanently added")) return; // host key note, not a problem
+            if (level >= WARN || message.contains("leaving main loop") || message.contains("not registered")
+                    || message.contains("Authentication succeeded") || message.contains("Connection established")) {
+                diag.accept((level >= WARN ? "SSH problem: " : "SSH: ") + message.lines().findFirst().orElse(message));
+            }
         }
     }
 }

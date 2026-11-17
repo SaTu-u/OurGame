@@ -29,11 +29,12 @@ Everything below was verified against a real Purpur 26.2 server; example respons
 
 | Item | Value |
 |---|---|
-| Base URL | Given by the server owner: a tunnel address (`https://<id>.lhr.life` from localhost.run, which changes every few hours unless the owner registered the plugin's SSH key; `https://<name>.ru.tuna.am` from tuna.am; `https://<words>.trycloudflare.com`; `https://<name>.ngrok-free.app`), an own domain such as `https://bridge.example.com` (Let's Encrypt), or `http://127.0.0.1:8765` locally. `GET /api/status` → `tunnel.url` shows the current tunnel address. |
+| Base URL | Given by the server owner: a tunnel address (`https://<id>.lhr.life` or `https://<id>.app.lhr.life` from localhost.run, which changes every few hours unless the owner registered the plugin's SSH key; `https://<name>.ru.tuna.am` from tuna.am; `https://<words>.trycloudflare.com`; `https://<name>.ngrok-free.app`), an own domain such as `https://bridge.example.com` (Let's Encrypt), or `http://127.0.0.1:8765` locally. `GET /api/status` → `tunnel.url` shows the current tunnel address. |
 | Auth | Every request: header `Authorization: Bearer <token>`. The token is in `plugins/ClaudeBridge/token.txt` on the server. |
 | Requests | `GET` with query parameters, `POST` with a JSON body (`Content-Type: application/json`). Any parameter may be sent either way. |
 | Responses | JSON. Errors are `{"error": "message"}` with an HTTP status code. |
 | Start here | `GET /api` lists every endpoint with a one-line description; `GET /api/status` checks the server. |
+| Liveness | `GET /health` needs no token and answers `{"service":"claudebridge","instance":"…"}`: use it to check that a tunnel address reaches the plugin before asking the owner for the token. |
 
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" https://bridge.example.com/api/status
@@ -103,8 +104,10 @@ Server version, TPS, MSPT, memory, players, worlds and HTTPS state.
  "worlds":[{"name":"world","environment":"NORMAL","players":0,"entities":12,"loadedChunks":81,"time":472,
  "storm":false,"thundering":false,"difficulty":"EASY","spawn":[0,87,0]}, …],
  "plugins":1,"avatarSpawned":true,
- "tls":{"mode":"acme","state":"Let's Encrypt certificate for bridge.example.com, valid until …","notAfter":"…"}}
+ "tls":{"mode":"acme","state":"Let's Encrypt certificate for bridge.example.com, valid until …","notAfter":"…"},
+ "tunnel":{"provider":"localhostrun","state":"online","url":"https://33a8deeca0b657.app.lhr.life","connected":true,"check":"ok"}}
 ```
+`tunnel.check` is the plugin's own test of its public address (`ok`, or `failing: <reason>`; absent until the first test).
 TPS 20 is perfect; below ~18 means lag. MSPT above 50 means the server cannot keep up.
 
 #### `POST /api/console` `{command, console?, wait_ms?}`

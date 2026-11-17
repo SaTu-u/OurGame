@@ -33,6 +33,10 @@ import java.util.logging.Level;
 /** Small JSON-over-HTTP server with bearer-token authentication. */
 final class ApiServer {
 
+    /** Random per start; the tunnel self-check recognises its own server by it. */
+    static final String INSTANCE_ID = Long.toHexString(new java.security.SecureRandom().nextLong());
+
+
     static final Gson GSON = new GsonBuilder()
             .disableHtmlEscaping()
             .serializeNulls()
@@ -211,6 +215,11 @@ final class ApiServer {
             if (allowList != null && ex.getRemoteAddress() != null && !allowList.allows(ex.getRemoteAddress().getAddress())) {
                 plugin.audit().log(remote, method, path, "BLOCKED: address is not in http.allowed-ips");
                 send(ex, 403, error("forbidden"));
+                return;
+            }
+            if (path.equals("/health") && (method.equals("GET") || method.equals("HEAD"))) {
+                // Unauthenticated liveness answer for the tunnel self-check; tells nothing about the server.
+                send(ex, 200, Map.of("service", "claudebridge", "instance", INSTANCE_ID));
                 return;
             }
             if (!plugin.isApiEnabled()) {
