@@ -29,7 +29,7 @@ Everything below was verified against a real Purpur 26.2 server; example respons
 
 | Item | Value |
 |---|---|
-| Base URL | Given by the server owner, for example `https://bridge.example.com` (Let's Encrypt, port 443). Local setups may use `http://127.0.0.1:8765`. |
+| Base URL | Given by the server owner: a tunnel address (`https://<words>.trycloudflare.com`, which changes on every server restart, or a permanent `https://<name>.ngrok-free.app`), an own domain such as `https://bridge.example.com` (Let's Encrypt), or `http://127.0.0.1:8765` locally. `GET /api/status` → `tunnel.url` shows the current tunnel address. |
 | Auth | Every request: header `Authorization: Bearer <token>`. The token is in `plugins/ClaudeBridge/token.txt` on the server. |
 | Requests | `GET` with query parameters, `POST` with a JSON body (`Content-Type: application/json`). Any parameter may be sent either way. |
 | Responses | JSON. Errors are `{"error": "message"}` with an HTTP status code. |
@@ -115,6 +115,11 @@ written during `wait_ms` (default 500 ms). `console: true` runs it as the real c
 {"command":"time set day","dispatched":true,"feedback":["Set minecraft:overworld to time marker minecraft:day"],"log":[]}
 {"command":"nosuchcommand","dispatched":false,"feedback":[],"log":[],"note":"the command does not exist or reported failure"}
 ```
+
+Plugin self-management through the console: `claudebridge status` shows the API, avatar and tunnel state;
+`claudebridge reload` re-reads the config and restarts the API about 0.5 s after answering, so requests sent in the
+next 1–2 seconds may fail; just retry. Do not run `claudebridge off`: you would lock yourself out until an admin runs `on`.
+With a Cloudflare quick tunnel the public address changes after every server restart, and the owner has to give you the new one.
 
 #### `GET /api/logs?file=latest.log&lines=200&grep=text`
 Tail of a log file (case-insensitive `grep` filter; `.gz` archives work too). `GET /api/logs/list` lists the files.

@@ -28,6 +28,7 @@ public final class ClaudeBridgePlugin extends JavaPlugin {
 
     private ApiServer api;
     private TlsManager tlsManager;
+    private TunnelManager tunnel;
     private volatile boolean apiEnabled = true;
     private volatile String token;
     private Audit audit;
@@ -60,6 +61,7 @@ public final class ClaudeBridgePlugin extends JavaPlugin {
     @Override
     public void onDisable() {
         if (avatar != null) avatar.shutdown();
+        if (tunnel != null) tunnel.stop();
         if (api != null) api.stop();
         if (tlsManager != null) tlsManager.stop();
         if (audit != null) audit.close();
@@ -89,6 +91,8 @@ public final class ClaudeBridgePlugin extends JavaPlugin {
                     + (allowList.isEmpty() ? "" : ", allowed clients: " + allowList)
                     + " (token: plugins/ClaudeBridge/token.txt)");
             if (tls != null) getLogger().info("HTTPS " + tlsManager.describe());
+            tunnel = new TunnelManager(this);
+            tunnel.start(port, tls != null);
             if (!local && tls == null) {
                 getLogger().warning("API is reachable from the network WITHOUT encryption. Set http.tls.mode (acme, self-signed or files).");
             }
@@ -101,6 +105,7 @@ public final class ClaudeBridgePlugin extends JavaPlugin {
     }
 
     void restartApi() {
+        if (tunnel != null) tunnel.stop();
         if (api != null) api.stop();
         if (tlsManager != null) tlsManager.stop();
         startApi();
@@ -164,6 +169,7 @@ public final class ClaudeBridgePlugin extends JavaPlugin {
     }
 
     TlsManager tls() { return tlsManager; }
+    TunnelManager tunnel() { return tunnel; }
     String token() { return token; }
     boolean isApiEnabled() { return apiEnabled; }
     Audit audit() { return audit; }
@@ -183,6 +189,11 @@ public final class ClaudeBridgePlugin extends JavaPlugin {
                 sender.sendMessage(Component.text("ClaudeBridge API: " + (apiEnabled ? "включен" : "выключен")
                         + ", порт " + getConfig().getInt("http.port", 8765)
                         + ", аватар: " + (avatar.isSpawned() ? "в мире" : "не в мире"), NamedTextColor.AQUA));
+                if (tunnel != null && !"none".equals(tunnel.info().get("provider"))) {
+                    String url = tunnel.publicUrl();
+                    sender.sendMessage(Component.text("Туннель: " + (url != null ? url : String.valueOf(tunnel.info().get("state"))),
+                            url != null ? NamedTextColor.GREEN : NamedTextColor.YELLOW));
+                }
             }
             case "on" -> {
                 apiEnabled = true;
@@ -207,8 +218,9 @@ public final class ClaudeBridgePlugin extends JavaPlugin {
             case "reload" -> {
                 reloadConfig();
                 loadToken();
-                restartApi();
-                sender.sendMessage(Component.text("Конфиг перечитан, API перезапущен.", NamedTextColor.GREEN));
+                // Delayed, so that a reload requested through the API itself can still send its response.
+                getServer().getScheduler().runTaskLater(this, this::restartApi, 10L);
+                sender.sendMessage(Component.text("Конфиг перечитан, API перезапустится через полсекунды.", NamedTextColor.GREEN));
             }
             case "despawn" -> {
                 avatar.despawn();

@@ -135,7 +135,7 @@ final class TlsManager {
         switch (mode) {
             case "self-signed" -> {
                 TlsSupport.resetSelfSigned(dataDir);
-                plugin.restartApi();
+                Bukkit.getScheduler().runTaskLater(plugin, plugin::restartApi, 10L);
                 return "Создан новый самоподписанный сертификат: plugins/ClaudeBridge/" + TlsSupport.CERT_PEM
                         + ". Скопируйте его на веб-сервер заново.";
             }

@@ -32,6 +32,26 @@ http:
   # Принимать запросы только с этих адресов (IP, подсеть CIDR или имя хоста). Пусто = с любых.
   allowed-ips: []
 
+# Публичный HTTPS-адрес через туннель, если на хостинге нельзя открыть порт 443.
+# Плагин сам скачает и запустит программу-агент (Linux), она подключается к сервису только исходящим соединением.
+# Адрес появится в консоли ("Tunnel ready: https://...") и в plugins/ClaudeBridge/tunnel-url.txt.
+# Для туннеля оставьте http.bind: 127.0.0.1 и http.tls.mode: off — шифрование обеспечивает туннель.
+tunnel:
+  # none       - выключен;
+  # cloudflare - Cloudflare quick tunnel: без регистрации, адрес https://<слова>.trycloudflare.com меняется при каждом запуске;
+  # ngrok      - нужен бесплатный аккаунт ngrok.com, адрес постоянный.
+  provider: none
+  ngrok:
+    # Токен агента: https://dashboard.ngrok.com/get-started/your-authtoken
+    authtoken: ""
+    # Необязательно: ваш бесплатный статический домен ngrok (например name.ngrok-free.app); пусто = выданный аккаунту.
+    domain: ""
+  cloudflare:
+    # auto | http2 (только TCP) | quic
+    protocol: auto
+  # Свой путь к программе туннеля, если хостинг не даёт скачивать (относительно папки сервера). Пусто = скачать.
+  binary: ""
+
 auth:
   # Если пусто, токен хранится в plugins/ClaudeBridge/token.txt (создаётся автоматически при первом запуске).
   # Запросы должны содержать заголовок: Authorization: Bearer <токен>

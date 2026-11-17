@@ -86,6 +86,7 @@ final class ServerService {
             m.put("plugins", s.getPluginManager().getPlugins().length);
             m.put("avatarSpawned", plugin.avatar().isSpawned());
             m.put("tls", plugin.tls() == null ? null : plugin.tls().info());
+            m.put("tunnel", plugin.tunnel() == null ? null : plugin.tunnel().info());
             return m;
         });
     }
