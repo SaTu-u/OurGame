@@ -57,7 +57,7 @@ final class Routes {
         api.route("GET", "/api/avatar/inventory", "Inventory slots, held slot and armor", r -> plugin.sync(avatar::inventory));
 
         // --- avatar: movement
-        api.route("POST", "/api/avatar/goto", "{x, z, y?} or {player}, distance?, wait?=true, timeout?=30: walk there using pathfinding", r ->
+        api.route("POST", "/api/avatar/goto", "{x, z, y?} (without y: any height), or {player}, or {entity: uuid}; distance?, wait?=true, timeout?=30: walk there using pathfinding", r ->
                 Avatar.await(plugin.sync(() -> avatar.startGoto(r)), r));
         api.route("POST", "/api/avatar/follow", "{player, distance?=2.5}: keep following a player until /stop", r ->
                 Avatar.await(plugin.sync(() -> avatar.startFollow(r)), withNoWait(r)));
@@ -71,7 +71,10 @@ final class Routes {
                 Avatar.await(plugin.sync(() -> avatar.startBreak(r)), r));
         api.route("POST", "/api/avatar/place", "{x, y, z, slot?}: place a block from the inventory", r -> plugin.sync(() -> avatar.place(r)));
         api.route("POST", "/api/avatar/use", "{x, y, z}: open/close doors, flip levers, press buttons, look into containers", r -> plugin.sync(() -> avatar.use(r)));
-        api.route("POST", "/api/avatar/attack", "{entity: uuid} or {type: ZOMBIE} or {player}; default: nearest hostile mob", r -> plugin.sync(() -> avatar.attack(r)));
+        api.route("POST", "/api/avatar/attack", "{entity: uuid} or {type: PIG} or {player}; default target: nearest hostile mob within 16 blocks. chase?=true: run after the target and hit until it dies, then pick up the drops (fight_timeout?=60 s); chase=false: a single hit within reach", r ->
+                r.bool("chase", true)
+                        ? Avatar.await(plugin.sync(() -> avatar.startAttack(r)), r)
+                        : plugin.sync(() -> avatar.attackOnce(r)));
         api.route("POST", "/api/avatar/chat", "{message, to?: player name for a whisper}", r -> plugin.sync(() -> avatar.chat(r)));
 
         // --- avatar: items

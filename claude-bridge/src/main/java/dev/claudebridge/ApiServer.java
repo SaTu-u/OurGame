@@ -172,11 +172,11 @@ final class ApiServer {
         return out;
     }
 
-    void start(String bind, int port, SSLContext tls, IpAllowList allowList) throws IOException {
+    void start(String bind, int port, SSLContext tls, HttpsConfigurator configurator, IpAllowList allowList) throws IOException {
         this.allowList = allowList;
         if (tls != null) {
             HttpsServer https = HttpsServer.create(new InetSocketAddress(bind, port), 64);
-            https.setHttpsConfigurator(new HttpsConfigurator(tls));
+            https.setHttpsConfigurator(configurator != null ? configurator : new HttpsConfigurator(tls));
             server = https;
         } else {
             server = HttpServer.create(new InetSocketAddress(bind, port), 64);

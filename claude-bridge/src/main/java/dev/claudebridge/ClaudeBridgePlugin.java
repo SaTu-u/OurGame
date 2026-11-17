@@ -27,6 +27,7 @@ import java.util.logging.Level;
 public final class ClaudeBridgePlugin extends JavaPlugin {
 
     private ApiServer api;
+    private TlsManager tlsManager;
     private volatile boolean apiEnabled = true;
     private volatile String token;
     private Audit audit;
@@ -60,6 +61,7 @@ public final class ClaudeBridgePlugin extends JavaPlugin {
     public void onDisable() {
         if (avatar != null) avatar.shutdown();
         if (api != null) api.stop();
+        if (tlsManager != null) tlsManager.stop();
         if (audit != null) audit.close();
     }
 
@@ -70,28 +72,25 @@ public final class ClaudeBridgePlugin extends JavaPlugin {
         IpAllowList allowList = new IpAllowList(getConfig().getStringList("http.allowed-ips"));
         for (String p : allowList.problems()) getLogger().severe("http.allowed-ips: " + p + " (all requests will be rejected until fixed)");
 
-        SSLContext tls = null;
-        if (getConfig().getBoolean("http.tls.enabled", false)) {
-            try {
-                TlsSupport.Loaded loaded = TlsSupport.loadOrCreate(getDataFolder().toPath(), getConfig().getStringList("http.tls.hosts"));
-                tls = loaded.context();
-                getLogger().info("HTTPS certificate: " + serverRoot.relativize(loaded.pemFile().toAbsolutePath())
-                        + " (SHA-256 " + TlsSupport.fingerprint(loaded.certificate()) + ")");
-            } catch (Exception e) {
-                getLogger().log(Level.SEVERE, "Could not set up HTTPS; the API is NOT started", e);
-                return;
-            }
+        tlsManager = new TlsManager(this);
+        SSLContext tls;
+        try {
+            tls = tlsManager.start();
+        } catch (Exception e) {
+            getLogger().log(Level.SEVERE, "Could not set up HTTPS (" + e.getMessage() + "); the API is NOT started");
+            return;
         }
 
         api = new ApiServer(this);
         Routes.register(this, api);
         try {
-            api.start(bind, port, tls, allowList.isEmpty() ? null : allowList);
+            api.start(bind, port, tls, tls == null ? null : tlsManager.configurator(), allowList.isEmpty() ? null : allowList);
             getLogger().info("ClaudeBridge API listening on " + (tls != null ? "https" : "http") + "://" + bind + ":" + port
                     + (allowList.isEmpty() ? "" : ", allowed clients: " + allowList)
                     + " (token: plugins/ClaudeBridge/token.txt)");
+            if (tls != null) getLogger().info("HTTPS " + tlsManager.describe());
             if (!local && tls == null) {
-                getLogger().warning("API is reachable from the network WITHOUT encryption. Set http.tls.enabled: true.");
+                getLogger().warning("API is reachable from the network WITHOUT encryption. Set http.tls.mode (acme, self-signed or files).");
             }
             if (!local && allowList.isEmpty()) {
                 getLogger().warning("API accepts requests from any IP. Set http.allowed-ips to your reverse proxy address.");
@@ -103,6 +102,7 @@ public final class ClaudeBridgePlugin extends JavaPlugin {
 
     void restartApi() {
         if (api != null) api.stop();
+        if (tlsManager != null) tlsManager.stop();
         startApi();
     }
 
@@ -163,6 +163,7 @@ public final class ClaudeBridgePlugin extends JavaPlugin {
         }
     }
 
+    TlsManager tls() { return tlsManager; }
     String token() { return token; }
     boolean isApiEnabled() { return apiEnabled; }
     Audit audit() { return audit; }
@@ -215,13 +216,11 @@ public final class ClaudeBridgePlugin extends JavaPlugin {
             }
             case "tls" -> {
                 try {
-                    TlsSupport.reset(getDataFolder().toPath());
-                    restartApi();
                     audit.log("console", "CMD", "/claudebridge tls", sender.getName());
-                    sender.sendMessage(Component.text("Создан новый HTTPS-сертификат: plugins/ClaudeBridge/" + TlsSupport.CERT_PEM
-                            + ". Скопируйте его на веб-сервер заново.", NamedTextColor.GREEN));
-                } catch (IOException e) {
-                    sender.sendMessage(Component.text("Не удалось пересоздать сертификат: " + e.getMessage(), NamedTextColor.RED));
+                    String result = tlsManager == null ? "API не запущен." : tlsManager.rotate();
+                    sender.sendMessage(Component.text(result, NamedTextColor.GREEN));
+                } catch (Exception e) {
+                    sender.sendMessage(Component.text("Не удалось обновить сертификат: " + e.getMessage(), NamedTextColor.RED));
                 }
             }
             default -> sender.sendMessage(Component.text("Использование: /" + label + " <status|on|off|token|tls|reload|despawn>", NamedTextColor.GRAY));

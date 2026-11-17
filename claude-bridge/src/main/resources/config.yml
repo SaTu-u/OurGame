@@ -3,19 +3,33 @@
 
 http:
   # Адрес, на котором слушает API.
-  #  - 127.0.0.1: веб-сервер (Caddy/nginx) стоит на той же машине (VPS);
-  #  - 0.0.0.0: игровой хостинг; тогда обязательно включите tls и allowed-ips ниже.
+  #  - 127.0.0.1: к API обращаются только с этой же машины (например, через Caddy/nginx на ней же);
+  #  - 0.0.0.0: API доступен из сети (игровой хостинг). Тогда обязательно включите tls ниже.
   bind: 127.0.0.1
-  # На игровом хостинге: дополнительный порт, выделенный панелью хостинга.
+  # Порт API. Для режима acme снаружи должен быть доступен порт 443 (на хостинге: выделенный порт 443).
   port: 8765
   tls:
-    # Встроенный HTTPS с самоподписанным сертификатом (создаётся автоматически).
-    # Сертификат для веб-сервера: plugins/ClaudeBridge/tls-cert.pem. Имя для проверки: claudebridge.local
-    enabled: false
-    # Дополнительные имена или IP в сертификате (claudebridge.local, localhost и 127.0.0.1 есть всегда).
+    # off         - без шифрования (только вместе с bind: 127.0.0.1);
+    # acme        - бесплатный доверенный сертификат Let's Encrypt для вашего домена, продлевается сам.
+    #               Нужно: домен с A-записью на IP сервера, порт 443 снаружи ведёт на этот плагин;
+    # self-signed - свой сертификат для веб-сервера, который его закрепляет (plugins/ClaudeBridge/tls-cert.pem);
+    # files       - готовый сертификат и ключ в PEM-файлах (перечитываются при изменении).
+    mode: off
+    acme:
+      # Домен, по которому доступен API, например: bridge.example.ru
+      domain: ""
+      # Почта для писем Let's Encrypt (необязательно).
+      email: ""
+      # Прочитайте соглашение Let's Encrypt (https://letsencrypt.org/repository/) и поставьте true.
+      agree-tos: false
+      # Для пробы без лимитов: https://acme-staging-v02.api.letsencrypt.org/directory (сертификат не будет доверенным)
+      directory: "https://acme-v02.api.letsencrypt.org/directory"
+    files:
+      certificate: "plugins/ClaudeBridge/cert.pem"   # цепочка сертификатов (fullchain)
+      private-key: "plugins/ClaudeBridge/key.pem"    # ключ PKCS#8 ("BEGIN PRIVATE KEY") или RSA
+    # self-signed: дополнительные имена или IP в сертификате (claudebridge.local, localhost и 127.0.0.1 есть всегда).
     hosts: []
   # Принимать запросы только с этих адресов (IP, подсеть CIDR или имя хоста). Пусто = с любых.
-  # На игровом хостинге укажите IP вашего веб-сервера, например: ["203.0.113.10"]
   allowed-ips: []
 
 auth:

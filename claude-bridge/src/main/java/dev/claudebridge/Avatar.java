@@ -66,6 +66,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 import java.util.logging.Level;
 
@@ -96,6 +97,13 @@ final class Avatar implements Listener {
     private int ticketCX = Integer.MIN_VALUE;
     private int ticketCZ = Integer.MIN_VALUE;
     private long tickCounter;
+    /** When set, auto-pickups are also reported here (used by the attack task to list collected drops). */
+    private List<String> pickupSink;
+    // Own physics: Paper/Purpur skip physics for entities far from players ("entity activation range"),
+    // and a lonely avatar is usually far from players, so gravity and ground checks are done here.
+    private double fallVelocity;
+    private double fallDistance;
+    private boolean movedThisTick;
 
     Avatar(ClaudeBridgePlugin plugin) {
         this.plugin = plugin;
@@ -163,10 +171,12 @@ final class Avatar implements Listener {
         }
         if (isSpawned()) {
             cancelTask("avatar was moved by spawn");
-            entity.teleport(loc);
+            loadAround(loc);
+            entity.teleport(snapToGround(loc));
             return map("status", "teleported", "state", state());
         }
-        spawnAt(loc);
+        loadAround(loc);
+        spawnAt(snapToGround(loc));
         return map("status", "spawned", "state", state());
     }
 
@@ -175,6 +185,8 @@ final class Avatar implements Listener {
         String description = plugin.getConfig().getString("avatar.description", "AI");
         String skin = plugin.getConfig().getString("avatar.skin", "");
         boolean invulnerable = plugin.getConfig().getBoolean("avatar.invulnerable", false);
+        // An entity placed into an unloaded chunk is unloaded (and, being non-persistent, removed) at once.
+        loadAround(loc);
         entity = loc.getWorld().spawn(loc, Mannequin.class, m -> {
             m.customName(Component.text(name));
             m.setCustomNameVisible(true);
@@ -326,6 +338,58 @@ final class Avatar implements Listener {
                 if (task == t) task = null;
             }
         }
+        if (entity != null && entity.isValid() && !movedThisTick) applyGravity();
+        movedThisTick = false;
+    }
+
+    /** Standing on something solid (checks the block just below the feet, so slabs and stairs count). */
+    private boolean grounded() {
+        Location l = entity.getLocation();
+        Block below = l.getWorld().getBlockAt(l.getBlockX(), (int) Math.floor(l.getY() - 0.05), l.getBlockZ());
+        return !below.isPassable() && below.getBoundingBox().getMaxY() >= l.getY() - 0.06;
+    }
+
+    private boolean inWaterNow() {
+        Location l = entity.getLocation();
+        return l.getBlock().getType() == Material.WATER
+                || l.getWorld().getBlockAt(l.getBlockX(), (int) Math.floor(l.getY() + 0.5), l.getBlockZ()).getType() == Material.WATER;
+    }
+
+    private void applyGravity() {
+        Location l = entity.getLocation();
+        boolean water = inWaterNow();
+        if (water || grounded()) {
+            if (!water && fallDistance > 3.0) {
+                entity.damage(Math.ceil(fallDistance - 3.0), org.bukkit.damage.DamageSource.builder(org.bukkit.damage.DamageType.FALL).build());
+            }
+            fallVelocity = 0;
+            fallDistance = 0;
+            return;
+        }
+        World w = l.getWorld();
+        fallVelocity = Math.min(fallVelocity + 0.08, 3.92);
+        double target = l.getY() - fallVelocity;
+        double landing = Double.NaN;
+        for (int y = (int) Math.floor(l.getY() - 0.05); y >= (int) Math.floor(target) && y >= w.getMinHeight(); y--) {
+            Block b = w.getBlockAt(l.getBlockX(), y, l.getBlockZ());
+            if (b.getType() == Material.WATER) {
+                landing = Math.max(target, y);
+                fallVelocity = 0;
+                break;
+            }
+            if (!b.isPassable()) {
+                double top = b.getBoundingBox().getMaxY();
+                if (top >= target) landing = top;
+                break;
+            }
+        }
+        double ny = Double.isNaN(landing) ? target : landing;
+        if (ny < w.getMinHeight() - 64) {
+            entity.damage(1000, org.bukkit.damage.DamageSource.builder(org.bukkit.damage.DamageType.OUT_OF_WORLD).build());
+            return;
+        }
+        entity.teleport(new Location(w, l.getX(), ny, l.getZ(), l.getYaw(), l.getPitch()));
+        fallDistance += l.getY() - ny;
     }
 
     private void autoPickup() {
@@ -337,6 +401,7 @@ final class Avatar implements Listener {
             if (taken > 0) {
                 entity.playPickupItemAnimation(it, taken);
                 plugin.chat().add("avatar-pickup", name(), "picked up " + taken + " x " + st.getType().name());
+                if (pickupSink != null) pickupSink.add(taken + " x " + st.getType().name());
             }
         }
     }
@@ -398,6 +463,45 @@ final class Avatar implements Listener {
         }
     }
 
+    /** Moves a location out of solid blocks and down onto the floor, so teleports never drop or bury the avatar. */
+    private static Location snapToGround(Location loc) {
+        World w = loc.getWorld();
+        int x = loc.getBlockX();
+        int z = loc.getBlockZ();
+        int y = (int) Math.floor(loc.getY());
+        for (int i = 0; i < 64 && y < w.getMaxHeight() - 2; i++, y++) {
+            if (PathFinder.passable(w.getBlockAt(x, y, z)) && PathFinder.passable(w.getBlockAt(x, y + 1, z))) break;
+        }
+        for (int i = 0; i < 160 && y > w.getMinHeight(); i++) {
+            Block below = w.getBlockAt(x, y - 1, z);
+            if (!below.isPassable() || below.getType() == Material.WATER) break;
+            y--;
+        }
+        Block below = w.getBlockAt(x, y - 1, z);
+        double floor = below.isPassable() ? y : Math.max(below.getBoundingBox().getMaxY(), y - 1.0);
+        Location out = loc.clone();
+        out.setY(floor);
+        return out;
+    }
+
+    /** Synchronously loads and tickets the chunks around a location before the avatar is put there. */
+    private void loadAround(Location l) {
+        World w = l.getWorld();
+        int cx = l.getBlockX() >> 4;
+        int cz = l.getBlockZ() >> 4;
+        if (w.equals(ticketWorld) && cx == ticketCX && cz == ticketCZ) return;
+        removeTickets();
+        ticketWorld = w;
+        ticketCX = cx;
+        ticketCZ = cz;
+        for (int dx = -CHUNK_RADIUS; dx <= CHUNK_RADIUS; dx++) {
+            for (int dz = -CHUNK_RADIUS; dz <= CHUNK_RADIUS; dz++) {
+                w.addPluginChunkTicket(cx + dx, cz + dz, plugin);
+                tickets.add(new long[]{cx + dx, cz + dz});
+            }
+        }
+    }
+
     private boolean containsTicket(int x, int z) {
         for (long[] t : tickets) if (t[0] == x && t[1] == z) return true;
         return false;
@@ -436,8 +540,8 @@ final class Avatar implements Listener {
         m.put("health", r1(e.getHealth()));
         AttributeInstance max = e.getAttribute(Attribute.MAX_HEALTH);
         m.put("maxHealth", max == null ? null : r1(max.getValue()));
-        m.put("onGround", e.isOnGround());
-        m.put("inWater", e.isInWater());
+        m.put("onGround", grounded());
+        m.put("inWater", inWaterNow());
         m.put("standingOn", l.clone().subtract(0, 0.2, 0).getBlock().getType().name());
         m.put("light", l.getBlock().getLightLevel());
         m.put("biome", l.getBlock().getBiome().getKey().toString());
@@ -714,8 +818,13 @@ final class Avatar implements Listener {
 
     Map<String, Object> jump() {
         Mannequin e = requireEntity();
-        if (!e.isOnGround() && !e.isInWater()) return map("status", "failed", "reason", "not on the ground");
-        e.setVelocity(e.getVelocity().setY(0.42));
+        if (!grounded() && !inWaterNow()) return map("status", "failed", "reason", "not on the ground");
+        Location l = e.getLocation();
+        if (!PathFinder.passable(l.getWorld().getBlockAt(l.getBlockX(), (int) Math.floor(l.getY()) + 2, l.getBlockZ()))) {
+            return map("status", "failed", "reason", "no room above the head");
+        }
+        e.teleport(l.clone().add(0, 1.15, 0)); // gravity brings it back down on the next ticks
+        movedThisTick = true;
         return map("status", "ok");
     }
 
@@ -729,7 +838,10 @@ final class Avatar implements Listener {
             to = new Location(w, r.requireDbl("x"), r.requireDbl("y"), r.requireDbl("z"), e.getLocation().getYaw(), 0);
         }
         cancelTask("teleported");
-        e.teleport(to);
+        loadAround(to);
+        e.teleport(snapToGround(to));
+        fallVelocity = 0;
+        fallDistance = 0;
         return map("status", "ok", "position", pos(e.getLocation()));
     }
 
@@ -1118,24 +1230,23 @@ final class Avatar implements Listener {
         return false;
     }
 
-    Map<String, Object> attack(Request r) {
+    private static final double TARGET_SEARCH_RADIUS = 16;
+    private static final double HIT_RANGE = 3.0;
+
+    /** Target from {entity: uuid} | {player} | {type} (nearest of that type) | nothing (nearest hostile mob). */
+    private LivingEntity findTarget(Request r) {
         Mannequin e = requireEntity();
         LivingEntity target = null;
         if (r.has("entity")) {
-            Entity n;
-            try {
-                n = Bukkit.getEntity(UUID.fromString(r.str("entity")));
-            } catch (IllegalArgumentException ex) {
-                throw new ApiException(400, "entity must be a UUID from GET /api/avatar/state");
-            }
-            if (n instanceof LivingEntity le) target = le;
+            if (entityArg(r.str("entity")) instanceof LivingEntity le) target = le;
+            else throw new ApiException(422, "that entity cannot be attacked");
         } else if (r.has("player")) {
             target = player(r.str("player"));
         } else {
             String type = r.str("type", null);
             double best = Double.MAX_VALUE;
-            for (Entity n : e.getNearbyEntities(5, 3, 5)) {
-                if (!(n instanceof LivingEntity le) || n instanceof Player) continue;
+            for (Entity n : e.getNearbyEntities(TARGET_SEARCH_RADIUS, 8, TARGET_SEARCH_RADIUS)) {
+                if (!(n instanceof LivingEntity le) || n instanceof Player || isAvatar(n) || le.isDead()) continue;
                 if (type != null ? !n.getType().name().equalsIgnoreCase(type) : !(n instanceof Enemy)) continue;
                 double d = n.getLocation().distanceSquared(e.getLocation());
                 if (d < best) {
@@ -1143,23 +1254,122 @@ final class Avatar implements Listener {
                     target = le;
                 }
             }
+            if (target == null) {
+                throw new ApiException(404, type != null
+                        ? "no " + type.toUpperCase(Locale.ROOT) + " within " + (int) TARGET_SEARCH_RADIUS + " blocks"
+                        : "no hostile mob within " + (int) TARGET_SEARCH_RADIUS + " blocks; pass type (e.g. PIG), entity (uuid) or player");
+            }
         }
-        if (target == null || !target.isValid()) throw new ApiException(404, "no target found");
+        if (target == null || !target.isValid()) throw new ApiException(404, "target not found");
         if (isAvatar(target)) throw new ApiException(400, "the avatar cannot attack itself");
-        double dist = e.getEyeLocation().distance(target.getLocation().add(0, target.getHeight() / 2, 0));
-        if (dist > 4.0) throw new ApiException(422, String.format(Locale.ROOT, "target is too far (%.1f blocks); move closer first", dist));
+        return target;
+    }
+
+    private double hitDistance(LivingEntity target) {
+        return entity.getEyeLocation().distance(target.getLocation().add(0, target.getHeight() / 2, 0));
+    }
+
+    /** One melee hit with the held item; returns the damage dealt. */
+    private double hit(LivingEntity target) {
         face(target.getEyeLocation());
-        e.swingMainHand();
+        entity.swingMainHand();
         double damage = attackDamage(inv.getItem(heldSlot));
-        double before = target.getHealth();
-        target.damage(damage, e);
-        Vector dir = target.getLocation().toVector().subtract(e.getLocation().toVector()).setY(0);
+        target.damage(damage, entity);
+        Vector dir = target.getLocation().toVector().subtract(entity.getLocation().toVector()).setY(0);
         if (dir.lengthSquared() > 1e-6) target.knockback(0.4, -dir.getX(), -dir.getZ());
         ItemStack held = inv.getItem(heldSlot);
         if (held != null && (held.getType().name().endsWith("_SWORD") || held.getType().name().endsWith("_AXE"))) damageTool(1);
         syncEquipment();
+        return damage;
+    }
+
+    /** chase=false: a single hit, only if the target is already within reach. */
+    Map<String, Object> attackOnce(Request r) {
+        Mannequin e = requireEntity();
+        LivingEntity target = findTarget(r);
+        double dist = hitDistance(target);
+        if (dist > HIT_RANGE + 1.0) {
+            throw new ApiException(422, String.format(Locale.ROOT,
+                    "%s is %.1f blocks away; use chase=true (default) or walk closer", target.getType().name(), dist));
+        }
+        double before = target.getHealth();
+        double damage = hit(target);
         return map("status", "ok", "target", entityInfo(target, e.getLocation()), "damage", damage,
                 "healthBefore", r1(before), "healthAfter", target.isDead() ? 0 : r1(target.getHealth()), "killed", target.isDead());
+    }
+
+    /** Chases the target and keeps hitting it (with attack cooldown) until it dies, then walks over the drops. */
+    Task startAttack(Request r) {
+        LivingEntity target = findTarget(r);
+        int timeout = Math.max(5, Math.min(r.integer("fight_timeout", 60), 300));
+        AttackTask t = new AttackTask(target, timeout);
+        start(t);
+        return t;
+    }
+
+    final class AttackTask extends Task {
+        private final LivingEntity target;
+        private final MoveTask chase;
+        private final int maxTicks;
+        private final List<String> picked = new ArrayList<>();
+        private int ticks;
+        private int cooldown;
+        private int hits;
+        private double dealt;
+        private MoveTask collect;
+        private int collectTicks;
+
+        AttackTask(LivingEntity target, int timeoutSeconds) {
+            super("attack " + target.getType().name());
+            this.target = target;
+            this.chase = new MoveTask("chase", () -> target.isValid() ? target.getLocation() : null, 1.8, true);
+            this.maxTicks = timeoutSeconds * 20;
+        }
+
+        @Override
+        boolean tick() {
+            ticks++;
+            if (collect != null) {
+                collectTicks++;
+                if (!collect.done.isDone()) collect.tick();
+                if ((collect.done.isDone() && collectTicks >= 30) || collectTicks > 100) {
+                    pickupSink = null;
+                    return finish(ok("killed", true, "hits", hits, "damageDealt", r1(dealt), "pickedUp", picked));
+                }
+                return false;
+            }
+            if (target.isDead()) {
+                Location deathLoc = target.getLocation();
+                pickupSink = picked;
+                collect = new MoveTask("collect drops", () -> deathLoc, 0.5, false, null, true);
+                return false;
+            }
+            if (!target.isValid()) return finish(result("failed", "the target disappeared"));
+            if (ticks > maxTicks) return finish(result("failed", "the fight took too long (the target escaped?)"));
+            if (cooldown > 0) cooldown--;
+            if (hitDistance(target) <= HIT_RANGE) {
+                face(target.getEyeLocation());
+                if (cooldown == 0) {
+                    dealt += hit(target);
+                    hits++;
+                    cooldown = 12; // ~0.6 s, close to the vanilla attack cooldown
+                }
+            } else {
+                chase.tick();
+            }
+            return false;
+        }
+
+        private Map<String, Object> result(String status, String reason) {
+            return map("status", status, "reason", reason, "hits", hits, "damageDealt", r1(dealt),
+                    "target", entityInfo(target, entity.getLocation()));
+        }
+
+        @Override
+        void cancel(String reason) {
+            pickupSink = null;
+            super.cancel(reason);
+        }
     }
 
     private static double attackDamage(ItemStack it) {
@@ -1203,6 +1413,8 @@ final class Avatar implements Listener {
         Mannequin e = requireEntity();
         Supplier<Location> goal;
         String label;
+        boolean horizontal = false;
+        boolean moving = r.has("player") || r.has("entity");
         if (r.has("player")) {
             String pn = player(r.str("player")).getName();
             goal = () -> {
@@ -1210,25 +1422,24 @@ final class Avatar implements Listener {
                 return p == null ? null : p.getLocation();
             };
             label = "goto player " + pn;
+        } else if (r.has("entity")) {
+            Entity target = entityArg(r.str("entity"));
+            goal = () -> target.isValid() ? target.getLocation() : null;
+            label = "goto " + target.getType().name();
         } else {
             World w = e.getWorld();
             double x = r.requireDbl("x");
             double z = r.requireDbl("z");
-            double y;
-            if (r.has("y")) {
-                y = r.dbl("y", 0);
-            } else if (w.isChunkLoaded((int) Math.floor(x) >> 4, (int) Math.floor(z) >> 4)) {
-                y = w.getHighestBlockYAt((int) Math.floor(x), (int) Math.floor(z)) + 1;
-            } else {
-                y = e.getLocation().getY();
-            }
+            horizontal = !r.has("y");
+            double y = horizontal ? e.getLocation().getY() : r.dbl("y", 0);
             Location fixed = new Location(w, x, y, z);
             if (fixed.distance(e.getLocation()) > 2000) throw new ApiException(422, "target is more than 2000 blocks away; use teleport");
             goal = () -> fixed;
-            label = String.format(Locale.ROOT, "goto %.1f %.1f %.1f", x, y, z);
+            label = horizontal ? String.format(Locale.ROOT, "goto %.1f %.1f (any height)", x, z)
+                    : String.format(Locale.ROOT, "goto %.1f %.1f %.1f", x, y, z);
         }
-        double stop = Math.max(0.5, r.dbl("distance", r.has("player") ? 2.0 : 1.0));
-        MoveTask t = new MoveTask(label, goal, stop, false);
+        double stop = Math.max(0.5, r.dbl("distance", moving ? 2.0 : 1.0));
+        MoveTask t = new MoveTask(label, goal, stop, false, null, horizontal);
         start(t);
         return t;
     }
@@ -1310,6 +1521,8 @@ final class Avatar implements Listener {
         private final Supplier<Location> goal;
         private final double stopDist;
         private final boolean follow;
+        private final BooleanSupplier arrived;
+        private final boolean horizontal;
         private List<int[]> path = List.of();
         private int idx;
         private int replanTimer;
@@ -1320,10 +1533,20 @@ final class Avatar implements Listener {
         private Location lastPos;
 
         MoveTask(String name, Supplier<Location> goal, double stopDist, boolean follow) {
+            this(name, goal, stopDist, follow, null, false);
+        }
+
+        /**
+         * @param arrived    custom "we are there" test (e.g. "the block is within reach"); null = distance to goal
+         * @param horizontal ignore height (goto with x/z only)
+         */
+        MoveTask(String name, Supplier<Location> goal, double stopDist, boolean follow, BooleanSupplier arrived, boolean horizontal) {
             super(name);
             this.goal = goal;
             this.stopDist = stopDist;
             this.follow = follow;
+            this.arrived = arrived;
+            this.horizontal = horizontal;
         }
 
         @Override
@@ -1334,8 +1557,8 @@ final class Avatar implements Listener {
             Location g = goal.get();
             if (g == null) return finish(fail("the target is gone (player left?)"));
             if (!g.getWorld().equals(cur.getWorld())) return finish(fail("the target is in another world"));
-            double d = cur.distance(g);
-            if (d <= stopDist) {
+            double d = horizontal ? Math.hypot(g.getX() - cur.getX(), g.getZ() - cur.getZ()) : cur.distance(g);
+            if (arrived != null ? arrived.getAsBoolean() : d <= stopDist) {
                 if (!follow) return finish(ok("arrived", true, "distance", r1(d), "position", pos(cur)));
                 path = List.of();
                 idx = 0;
@@ -1347,7 +1570,7 @@ final class Avatar implements Listener {
             // Following: refresh the path every second, or soon after the current one runs out.
             boolean needPlan = follow ? (replanTimer <= 0 || (idx >= path.size() && replanTimer <= 15)) : idx >= path.size();
             if (needPlan) {
-                if (!e.isOnGround() && !e.isInWater()) return false; // wait until landed
+                if (!grounded() && !inWaterNow()) return false; // wait until landed
                 if (!follow) {
                     if (d < bestDist - 0.5) {
                         bestDist = d;
@@ -1357,7 +1580,7 @@ final class Avatar implements Listener {
                     }
                 }
                 PathFinder.Result res = PathFinder.find(cur.getWorld(), cur.getBlockX(), (int) Math.floor(cur.getY() + 0.01),
-                        cur.getBlockZ(), g.getX(), g.getY(), g.getZ(), stopDist, 3000);
+                        cur.getBlockZ(), g.getX(), horizontal ? Double.NaN : g.getY(), g.getZ(), stopDist, 3000);
                 path = res.path();
                 idx = 0;
                 replanTimer = 20;
@@ -1408,6 +1631,9 @@ final class Avatar implements Listener {
             e.setBodyYaw(yaw);
             e.setVelocity(new Vector());
             e.setFallDistance(0f);
+            movedThisTick = true;
+            fallVelocity = 0;
+            fallDistance = 0;
             if (horiz <= speed && Math.abs(ny - ty) < 0.01) idx++;
         }
 
@@ -1434,8 +1660,9 @@ final class Avatar implements Listener {
             super("break " + b.getType().name() + " at " + b.getX() + " " + b.getY() + " " + b.getZ());
             this.block = b;
             if (approachIfFar && !inReach(b)) {
-                Location c = b.getLocation().add(0.5, 0, 0.5);
-                approach = new MoveTask("approach", () -> c, Math.max(1.0, reach() - 1.5), false);
+                // Aim the feet so that the eyes (1.62 above) end up level with the block, stop once it is within reach.
+                Location feetTarget = b.getLocation().add(0.5, 0.5 - 1.62, 0.5);
+                approach = new MoveTask("approach", () -> feetTarget, Math.max(1.0, reach() - 0.5), false, () -> inReach(b), false);
             }
         }
 
@@ -1588,6 +1815,17 @@ final class Avatar implements Listener {
         int slot = r.integer(key, def);
         if (slot < 0 || slot >= INV_SIZE) throw new ApiException(400, key + " must be 0.." + (INV_SIZE - 1));
         return slot;
+    }
+
+    private static Entity entityArg(String uuid) {
+        Entity n;
+        try {
+            n = Bukkit.getEntity(UUID.fromString(uuid.trim()));
+        } catch (IllegalArgumentException ex) {
+            throw new ApiException(400, "entity must be a UUID (see nearbyEntities in GET /api/avatar/state)");
+        }
+        if (n == null || !n.isValid()) throw new ApiException(404, "entity not found or not loaded: " + uuid);
+        return n;
     }
 
     private static Player player(String name) {

@@ -96,9 +96,10 @@ final class PathFinder {
         return out;
     }
 
+    /** Distance to the goal; a NaN goal height means "any height" (horizontal distance only). */
     private static double h(int x, int y, int z, double gx, double gy, double gz) {
         double dx = x + 0.5 - gx;
-        double dy = y - gy;
+        double dy = Double.isNaN(gy) ? 0 : y - gy;
         double dz = z + 0.5 - gz;
         return Math.sqrt(dx * dx + dy * dy + dz * dz);
     }

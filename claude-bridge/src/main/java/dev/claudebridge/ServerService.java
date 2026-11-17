@@ -85,6 +85,7 @@ final class ServerService {
             m.put("worlds", worlds);
             m.put("plugins", s.getPluginManager().getPlugins().length);
             m.put("avatarSpawned", plugin.avatar().isSpawned());
+            m.put("tls", plugin.tls() == null ? null : plugin.tls().info());
             return m;
         });
     }
@@ -129,6 +130,7 @@ final class ServerService {
         m.put("dispatched", dispatched);
         m.put("feedback", new ArrayList<>(feedback));
         m.put("log", readAppended(log, before, 256 * 1024));
+        if (!dispatched) m.put("note", "the command does not exist or reported failure");
         return m;
     }
 

@@ -117,7 +117,32 @@ final class DbService {
         throw new ApiException(400, "pass either 'sqlite' (file path) or 'connection' (name from config.yml)");
     }
 
-    Object tables(Request r) throws SQLException {
+    Object tables(Request r) {
+        try {
+            return tablesUnchecked(r);
+        } catch (SQLException e) {
+            throw sqlError(e);
+        }
+    }
+
+    Object query(Request r) {
+        try {
+            return queryUnchecked(r);
+        } catch (SQLException e) {
+            throw sqlError(e);
+        }
+    }
+
+    private static ApiException sqlError(SQLException e) {
+        String msg = String.valueOf(e.getMessage());
+        String lower = msg.toLowerCase(Locale.ROOT);
+        if (lower.contains("readonly") || lower.contains("read-only") || lower.contains("read only")) {
+            return new ApiException(403, "write blocked: the database connection is read-only");
+        }
+        return new ApiException(400, "SQL error: " + msg);
+    }
+
+    private Object tablesUnchecked(Request r) throws SQLException {
         checkEnabled();
         boolean withColumns = r.bool("columns", false);
         try (Connection c = open(r)) {
@@ -144,7 +169,7 @@ final class DbService {
         }
     }
 
-    Object query(Request r) throws SQLException {
+    private Object queryUnchecked(Request r) throws SQLException {
         checkEnabled();
         String sql = validate(r.require("sql"));
         int configMax = plugin.getConfig().getInt("databases.max-rows", 500);
