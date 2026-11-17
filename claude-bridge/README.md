@@ -35,10 +35,14 @@
 3. Выполните `/claudebridge reload` или перезапустите сервер. Через несколько секунд в консоли появится:
    ```
    [ClaudeBridge] Tunnel: downloading https://...
-   [ClaudeBridge] Tunnel ready: https://....trycloudflare.com  <- give this address to the AI
+   [ClaudeBridge] Tunnel address: https://....trycloudflare.com  (connecting to Cloudflare...)
+   [ClaudeBridge] Tunnel ready: https://....trycloudflare.com  (connected; give this address to the AI ...)
    ```
-   Адрес также записывается в `plugins/ClaudeBridge/tunnel-url.txt` и виден в `/claudebridge status`.
+   Пока нет строки `Tunnel ready`, туннель не подключён. Для ngrok сразу появляется `Tunnel ready`.
+   Адрес также записывается в `plugins/ClaudeBridge/tunnel-url.txt` и виден в `/claudebridge status` с пометкой «(подключён)».
 4. Передайте ИИ этот адрес, а токен из `token.txt` — через защищённую форму, не в чат.
+
+**Cloudflare нужен исходящий порт 7844** (UDP или TCP). Многие игровые хостинги его закрывают. Тогда после `Tunnel address` появятся строки `Tunnel agent: ... ERR ...`, а через минуту подсказка `not connected`. В таком случае переходите на **ngrok**: он подключается через обычный порт 443.
 
 Если туннель падает, плагин сам перезапускает его через 10 секунд, затем через 20, 40 и так далее, но не реже раза в 5 минут.
 

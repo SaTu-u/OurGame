@@ -191,8 +191,9 @@ public final class ClaudeBridgePlugin extends JavaPlugin {
                         + ", аватар: " + (avatar.isSpawned() ? "в мире" : "не в мире"), NamedTextColor.AQUA));
                 if (tunnel != null && !"none".equals(tunnel.info().get("provider"))) {
                     String url = tunnel.publicUrl();
-                    sender.sendMessage(Component.text("Туннель: " + (url != null ? url : String.valueOf(tunnel.info().get("state"))),
-                            url != null ? NamedTextColor.GREEN : NamedTextColor.YELLOW));
+                    boolean ok = url != null && tunnel.connected();
+                    sender.sendMessage(Component.text("Туннель: " + (url != null ? url : "") + (ok ? " (подключён)" : " (" + tunnel.state() + ")"),
+                            ok ? NamedTextColor.GREEN : NamedTextColor.YELLOW));
                 }
             }
             case "on" -> {

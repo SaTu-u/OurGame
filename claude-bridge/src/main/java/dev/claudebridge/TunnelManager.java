@@ -47,6 +47,7 @@ final class TunnelManager {
     private volatile String state = "off";
     private volatile String publicUrl;
     private volatile boolean running;
+    private volatile boolean connected;
     private volatile Process process;
     private Thread supervisor;
 
@@ -103,11 +104,20 @@ final class TunnelManager {
         return publicUrl;
     }
 
+    boolean connected() {
+        return connected;
+    }
+
+    String state() {
+        return state;
+    }
+
     Map<String, Object> info() {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("provider", provider);
         m.put("state", state);
         m.put("url", publicUrl);
+        m.put("connected", connected);
         return m;
     }
 
@@ -129,17 +139,43 @@ final class TunnelManager {
                 plugin.getLogger().info("Tunnel: starting " + provider + " agent for " + target);
                 Process p = pb.start();
                 process = p;
+                connected = false;
+                long urlAt = 0;
+                long lastForward = 0;
+                boolean hinted = false;
                 try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
                     String line;
                     while ((line = r.readLine()) != null) {
                         remember(line);
+                        long now = System.currentTimeMillis();
                         String url = extractUrl(provider, line);
                         if (url != null && !url.equals(publicUrl)) {
                             publicUrl = url;
-                            state = "online";
+                            urlAt = now;
+                            // ngrok prints the URL once the session is up; cloudflared prints it before connecting to the edge.
+                            connected = provider.equals("ngrok");
+                            state = connected ? "online" : "address assigned, connecting to Cloudflare";
                             backoff = 10_000L;
                             Files.writeString(dataDir.resolve("tunnel-url.txt"), url + System.lineSeparator(), StandardCharsets.UTF_8);
-                            plugin.getLogger().info("Tunnel ready: " + url + "  (give this address to the AI; it is also saved in plugins/ClaudeBridge/tunnel-url.txt)");
+                            plugin.getLogger().info((connected ? "Tunnel ready: " : "Tunnel address: ") + url
+                                    + (connected ? "  (give this address to the AI; it is also saved in plugins/ClaudeBridge/tunnel-url.txt)"
+                                    : "  (connecting to Cloudflare...)"));
+                        }
+                        if (!connected && provider.equals("cloudflare") && line.contains("Registered tunnel connection")) {
+                            connected = true;
+                            state = "online";
+                            plugin.getLogger().info("Tunnel ready: " + publicUrl
+                                    + "  (connected; give this address to the AI, it is also saved in plugins/ClaudeBridge/tunnel-url.txt)");
+                        }
+                        if (isProblem(line) && now - lastForward > 15_000L) {
+                            lastForward = now;
+                            plugin.getLogger().warning("Tunnel agent: " + (line.length() > 240 ? line.substring(0, 240) + "..." : line));
+                        }
+                        if (!connected && !hinted && urlAt > 0 && now - urlAt > 60_000L) {
+                            hinted = true;
+                            plugin.getLogger().warning("Tunnel: not connected 60 s after getting an address. The hosting probably blocks"
+                                    + " outgoing port 7844 used by Cloudflare. Try tunnel.cloudflare.protocol: http2, or tunnel.provider: ngrok"
+                                    + " (ngrok uses outgoing port 443).");
                         }
                     }
                 }
@@ -167,6 +203,11 @@ final class TunnelManager {
             }
             backoff = Math.min(backoff * 2, 300_000L);
         }
+    }
+
+    private static boolean isProblem(String line) {
+        return line.contains(" ERR ") || line.contains(" WRN ") || line.contains("\"lvl\":\"eror\"")
+                || line.contains("\"lvl\":\"crit\"") || line.contains("\"lvl\":\"warn\"");
     }
 
     private synchronized void remember(String line) {
