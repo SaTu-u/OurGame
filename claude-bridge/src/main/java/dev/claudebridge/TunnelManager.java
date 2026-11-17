@@ -194,7 +194,7 @@ final class TunnelManager {
         remember(line);
         if (st.logged < 80) {
             st.logged++;
-            plugin.getLogger().info("Tunnel service: " + (line.length() > 2000 ? line.substring(0, 2000) + "..." : line));
+            plugin.getLogger().info("Tunnel service: " + readable(line));
             if (st.logged == 80) plugin.getLogger().info("Tunnel: further messages from the service are not shown");
         }
         LhrEvent ev = provider.equals("localhostrun") ? lhrEvent(line) : null;
@@ -229,6 +229,44 @@ final class TunnelManager {
         plugin.getLogger().info("Tunnel ready: " + url + (replacing ? "  (NEW address, the old one no longer works)" : "")
                 + "  (give this address to the AI; it is also saved in plugins/ClaudeBridge/tunnel-url.txt)");
         startSelfCheck(st, url);
+    }
+
+    /**
+     * The service message for the console: for localhost.run events "type subject: message" without the QR code
+     * (dozens of terminal colour codes) that follows the address; other lines without escape codes, shortened.
+     */
+    static String readable(String line) {
+        String t = line.trim();
+        if (t.startsWith("{")) {
+            try {
+                JsonElement e = JsonParser.parseString(t);
+                if (e.isJsonObject() && e.getAsJsonObject().has("type")) {
+                    JsonObject o = e.getAsJsonObject();
+                    String type = string(o, "type");
+                    String subject = string(o, "subject");
+                    String message = null;
+                    JsonElement data = o.get("data");
+                    if (data != null && data.isJsonObject()) message = string(data.getAsJsonObject(), "message");
+                    if (message == null && data != null) message = data.toString();
+                    StringBuilder b = new StringBuilder(type == null ? "event" : type.replaceFirst("^run\\.localhost\\.", ""));
+                    if (subject != null) b.append(' ').append(subject);
+                    if (message != null) {
+                        int qr = message.indexOf("Open your tunnel address on your mobile");
+                        if (qr >= 0) message = message.substring(0, qr);
+                        message = cleanEscapes(message).replaceAll("\\s*\\R\\s*", " | ").replaceAll("[ |]+$", "").strip();
+                        if (!message.isEmpty()) b.append(": ").append(message);
+                    }
+                    return shorten(b.toString(), 600);
+                }
+            } catch (RuntimeException ignored) {
+                // not JSON after all
+            }
+        }
+        return shorten(cleanEscapes(line).strip(), 600);
+    }
+
+    private static String shorten(String s, int max) {
+        return s.length() > max ? s.substring(0, max) + "..." : s;
     }
 
     private String abortReason(SshSession st) {
