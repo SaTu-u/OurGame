@@ -1,0 +1,61 @@
+# ClaudeBridge: HTTP API для удалённого администрирования сервера и игровой аватар ИИ.
+# Подробности и безопасная настройка: README.md в репозитории плагина.
+
+http:
+  # Адрес, на котором слушает API. По умолчанию только localhost:
+  # снаружи API должен быть доступен ТОЛЬКО через HTTPS reverse proxy (Caddy/nginx) на порту 443.
+  bind: 127.0.0.1
+  port: 8765
+
+auth:
+  # Если пусто, токен хранится в plugins/ClaudeBridge/token.txt (создаётся автоматически при первом запуске).
+  # Запросы должны содержать заголовок: Authorization: Bearer <токен>
+  token: ""
+
+# Какие возможности API включены.
+features:
+  console: true      # выполнение консольных команд
+  files: true        # просмотр файлов сервера (только чтение)
+  databases: true    # SELECT-запросы к базам (только чтение)
+  avatar: true       # игровой аватар
+
+files:
+  # Корень доступа к файлам относительно папки сервера.
+  root: "."
+  # Максимум байт за один запрос чтения файла.
+  max-read-bytes: 1048576
+  # Пути (относительно root), которые нельзя читать, например: ["plugins/AuthMe"]
+  deny: []
+
+databases:
+  max-rows: 500
+  # Именованные подключения к MySQL/MariaDB. SQLite-файлы можно открывать по пути без настройки.
+  # Рекомендуется пользователь БД только с правами SELECT.
+  connections: {}
+  #  luckperms:
+  #    url: "jdbc:mysql://127.0.0.1:3306/luckperms"
+  #    user: "readonly"
+  #    password: "secret"
+
+avatar:
+  name: "Claude"
+  # Подпись под именем.
+  description: "AI"
+  # Ник лицензионного игрока, чей скин использовать (пусто = стандартный скин).
+  skin: ""
+  # Дальность взаимодействия с блоками и сущностями.
+  reach: 4.5
+  # Скорость ходьбы, блоков в секунду (у игрока около 4.3).
+  walk-speed: 4.3
+  invulnerable: false
+  keep-inventory: false
+  # Сообщать в чат о входе и выходе аватара.
+  announce: true
+  # Возвращать аватара на прежнее место после перезапуска сервера.
+  respawn-on-start: true
+
+chat:
+  buffer-size: 1000
+
+# Журнал всех запросов к API: plugins/ClaudeBridge/audit.log
+audit-log: true
