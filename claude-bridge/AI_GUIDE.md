@@ -29,7 +29,7 @@ Everything below was verified against a real Purpur 26.2 server; example respons
 
 | Item | Value |
 |---|---|
-| Base URL | Given by the server owner: a tunnel address (`https://<words>.trycloudflare.com`, which changes on every server restart, or a permanent `https://<name>.ngrok-free.app`), an own domain such as `https://bridge.example.com` (Let's Encrypt), or `http://127.0.0.1:8765` locally. `GET /api/status` → `tunnel.url` shows the current tunnel address. |
+| Base URL | Given by the server owner: a tunnel address (`https://<id>.lhr.life` from localhost.run, which changes every few hours unless the owner registered the plugin's SSH key; `https://<name>.ru.tuna.am` from tuna.am; `https://<words>.trycloudflare.com`; `https://<name>.ngrok-free.app`), an own domain such as `https://bridge.example.com` (Let's Encrypt), or `http://127.0.0.1:8765` locally. `GET /api/status` → `tunnel.url` shows the current tunnel address. |
 | Auth | Every request: header `Authorization: Bearer <token>`. The token is in `plugins/ClaudeBridge/token.txt` on the server. |
 | Requests | `GET` with query parameters, `POST` with a JSON body (`Content-Type: application/json`). Any parameter may be sent either way. |
 | Responses | JSON. Errors are `{"error": "message"}` with an HTTP status code. |

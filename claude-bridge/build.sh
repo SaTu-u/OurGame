@@ -39,12 +39,21 @@ fetch com/google/code/gson/gson/2.11.0/gson-2.11.0.jar 527175ca6d81050b53bdd4c45
 fetch org/jetbrains/annotations/26.0.2/annotations-26.0.2.jar c7ce3cdeda3d18909368dfe5977332dfad326c6d
 fetch org/jspecify/jspecify/1.0.0/jspecify-1.0.0.jar 7425a601c1c7ec76645a78d22b8c6a627edee507
 fetch com/google/guava/guava/33.4.0-jre/guava-33.4.0-jre.jar 03fcc0a259f724c7de54a6a55ea7e26d3d5c0cac
+# JSch (SSH tunnels) is bundled into the plugin jar, the server does not have it.
+JSCH=jsch-2.28.7.jar
+fetch com/github/mwiede/jsch/2.28.7/$JSCH 0a91185cefe0dac6d0720684eebb53f83d8160ce
 
-# 3. Compile and package.
+# 3. Compile.
 CP="$(find "$LIBS" -name '*.jar' | tr '\n' ':')"
 find "$ROOT/src/main/java" -name '*.java' > "$BUILD/sources.txt"
 "$JAVAC" --release 25 -encoding UTF-8 -Xlint:-options -cp "$CP" -d "$CLASSES" @"$BUILD/sources.txt"
 cp -r "$ROOT/src/main/resources/." "$CLASSES/"
+
+# 4. Bundle JSch. It is a multi-release jar (Ed25519 lives in META-INF/versions/15), so the plugin jar is multi-release too.
+(cd "$CLASSES" && "$JAR" xf "$LIBS/$JSCH" && rm -f META-INF/MANIFEST.MF)
+printf 'Manifest-Version: 1.0\nMulti-Release: true\n' > "$BUILD/MANIFEST.MF"
+
+# 5. Package.
 OUT="$ROOT/dist/ClaudeBridge-$VERSION.jar"
-"$JAR" --create --file "$OUT" -C "$CLASSES" .
+"$JAR" --create --file "$OUT" --manifest "$BUILD/MANIFEST.MF" -C "$CLASSES" .
 echo "Built $OUT"

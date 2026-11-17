@@ -37,10 +37,27 @@ http:
 # Адрес появится в консоли ("Tunnel ready: https://...") и в plugins/ClaudeBridge/tunnel-url.txt.
 # Для туннеля оставьте http.bind: 127.0.0.1 и http.tls.mode: off — шифрование обеспечивает туннель.
 tunnel:
-  # none       - выключен;
-  # cloudflare - Cloudflare quick tunnel: без регистрации, адрес https://<слова>.trycloudflare.com меняется при каждом запуске;
-  # ngrok      - нужен бесплатный аккаунт ngrok.com, адрес постоянный.
+  # none         - выключен;
+  # localhostrun - localhost.run через встроенный SSH (порт 22), без регистрации и без внешних программ.
+  #                Адрес https://<id>.lhr.life меняется раз в несколько часов (постоянный — с use-key, см. ниже);
+  # tuna         - tuna.am (узлы в России), программа tuna + API-ключ; бесплатный постоянный поддомен <имя>.ru.tuna.am;
+  # tuna-ssh     - tuna.am через встроенный SSH, без программы; нужен SSH-ключ в кабинете tuna; адрес динамический;
+  # cloudflare   - Cloudflare quick tunnel (нужен исходящий порт 7844); адрес меняется при каждом запуске;
+  # ngrok        - нужен аккаунт ngrok.com (не работает с IP из некоторых стран).
   provider: none
+  localhostrun:
+    # false: пользователь nokey, без ключа. true: подключаться ключом плагина (plugins/ClaudeBridge/ssh/id_rsa.pub);
+    # зарегистрируйте его на https://admin.localhost.run — тогда адрес не будет меняться.
+    use-key: false
+  tuna:
+    # API-ключ из кабинета tuna.am (для provider: tuna).
+    api-key: ""
+    # Ваш бесплатный постоянный поддомен из кабинета tuna.am, например brave-otter-4821 (пусто = случайный адрес).
+    subdomain: ""
+  # Для проверки и отладки SSH-туннелей: другой сервер и порт (пусто/0 = по умолчанию).
+  ssh:
+    host: ""
+    port: 0
   ngrok:
     # Токен агента: https://dashboard.ngrok.com/get-started/your-authtoken
     authtoken: ""

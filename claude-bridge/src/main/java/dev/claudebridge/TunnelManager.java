@@ -39,6 +39,8 @@ final class TunnelManager {
 
     private static final Pattern CLOUDFLARE_URL = Pattern.compile("https://[a-z0-9-]+\\.trycloudflare\\.com");
     private static final Pattern NGROK_URL = Pattern.compile("https://[a-zA-Z0-9.-]+\\.ngrok(?:-free)?\\.(?:app|dev|io)");
+    private static final Pattern LHR_HOST = Pattern.compile("(?<![a-z0-9.-])([a-z0-9][a-z0-9-]*\\.lhr\\.(?:life|rocks))");
+    private static final Pattern TUNA_HOST = Pattern.compile("(?<![a-z0-9.-])([a-z0-9][a-z0-9-]*\\.[a-z]{2}\\.tuna\\.am)");
 
     private final ClaudeBridgePlugin plugin;
     private final Path dataDir;
@@ -65,8 +67,9 @@ final class TunnelManager {
             state = "off";
             return;
         }
-        if (!provider.equals("cloudflare") && !provider.equals("ngrok")) {
-            state = "unknown tunnel.provider '" + provider + "' (use none, cloudflare or ngrok)";
+        if (provider.equals("localhost.run") || provider.equals("lhr")) provider = "localhostrun";
+        if (!List.of("cloudflare", "ngrok", "localhostrun", "tuna", "tuna-ssh").contains(provider)) {
+            state = "unknown tunnel.provider '" + provider + "' (use none, localhostrun, tuna, tuna-ssh, cloudflare or ngrok)";
             plugin.getLogger().severe("Tunnel: " + state);
             return;
         }
@@ -75,16 +78,113 @@ final class TunnelManager {
             plugin.getLogger().severe("Tunnel: " + state);
             return;
         }
+        if (provider.equals("tuna") && c.getString("tunnel.tuna.api-key", "").isBlank()) {
+            state = "tunnel.tuna.api-key is empty (create it in your tuna.am dashboard)";
+            plugin.getLogger().severe("Tunnel: " + state);
+            return;
+        }
+        if (localTls && isSsh()) {
+            state = "SSH tunnels need http.tls.mode: off (the tunnel service provides HTTPS)";
+            plugin.getLogger().severe("Tunnel: " + state);
+            return;
+        }
         String target = (localTls ? "https" : "http") + "://127.0.0.1:" + localPort;
         running = true;
         state = "starting";
-        supervisor = new Thread(() -> supervise(target, localTls), "ClaudeBridge-tunnel");
+        supervisor = new Thread(() -> {
+            if (isSsh()) superviseSsh(localPort);
+            else supervise(target, localTls);
+        }, "ClaudeBridge-tunnel");
         supervisor.setDaemon(true);
         supervisor.start();
     }
 
+    private boolean isSsh() {
+        return provider.equals("localhostrun") || provider.equals("tuna-ssh");
+    }
+
+    // ------------------------------------------------------------------ SSH tunnels (no external program)
+
+    private volatile SshTunnel sshTunnel;
+
+    private void superviseSsh(int localPort) {
+        FileConfiguration c = plugin.getConfig();
+        long backoff = 10_000L;
+        while (running) {
+            try {
+                boolean lhr = provider.equals("localhostrun");
+                boolean useKey = !lhr || c.getBoolean("tunnel.localhostrun.use-key", false);
+                Path key = null;
+                if (useKey) {
+                    key = SshTunnel.ensureKey(dataDir);
+                    plugin.getLogger().info("Tunnel: SSH public key (" + (lhr ? "register it at https://admin.localhost.run to keep your address"
+                            : "add it in your tuna.am dashboard, SSH keys") + "):\n  " + SshTunnel.publicKeyLine(key)
+                            + "\n  (also in plugins/ClaudeBridge/ssh/id_rsa.pub)");
+                }
+                String host = c.getString("tunnel.ssh.host", "").isBlank() ? (lhr ? "localhost.run" : "ssh-ru.tuna.am") : c.getString("tunnel.ssh.host").trim();
+                int port = c.getInt("tunnel.ssh.port", 0) > 0 ? c.getInt("tunnel.ssh.port") : 22;
+                String user = lhr ? (useKey ? "claudebridge" : "nokey") : "claudebridge";
+                int remotePort = lhr ? 80 : 443;
+                String command = lhr ? "--output json" : "http";
+                SshTunnel t = new SshTunnel(host, port, user, key, remotePort, localPort, command);
+                sshTunnel = t;
+                state = "connecting to " + host;
+                publicUrl = null;
+                connected = false;
+                plugin.getLogger().info("Tunnel: connecting to " + host + ":" + port + " over SSH for http://127.0.0.1:" + localPort);
+                long[] lastForward = {0};
+                t.run(line -> {
+                    remember(line);
+                    String url = extractUrl(provider, line);
+                    if (url != null && !url.equals(publicUrl)) {
+                        publicUrl = url;
+                        connected = true;
+                        state = "online";
+                        try {
+                            Files.writeString(dataDir.resolve("tunnel-url.txt"), url + System.lineSeparator(), StandardCharsets.UTF_8);
+                        } catch (IOException ignored) {
+                            // the address is in the log anyway
+                        }
+                        plugin.getLogger().info("Tunnel ready: " + url
+                                + "  (give this address to the AI; it is also saved in plugins/ClaudeBridge/tunnel-url.txt)");
+                    } else if (!connected && System.currentTimeMillis() - lastForward[0] > 15_000L) {
+                        lastForward[0] = System.currentTimeMillis();
+                        plugin.getLogger().info("Tunnel service: " + (line.length() > 240 ? line.substring(0, 240) + "..." : line));
+                    }
+                });
+            } catch (Exception e) {
+                if (!running) break;
+                boolean wasOnline = connected;
+                publicUrl = null;
+                connected = false;
+                String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+                state = "disconnected: " + msg;
+                String hint = "";
+                if (msg.contains("Auth fail") || msg.contains("Auth cancel")) {
+                    hint = provider.equals("tuna-ssh") ? " Add the SSH public key shown above in your tuna.am dashboard."
+                            : " If use-key is true, register the public key at https://admin.localhost.run or set use-key: false.";
+                } else if (msg.contains("timeout") || msg.contains("timed out") || msg.contains("Connection refused") || msg.contains("UnknownHost")) {
+                    hint = " The hosting may block outgoing SSH (port 22).";
+                }
+                plugin.getLogger().warning("Tunnel: " + (wasOnline ? "connection lost" : "could not connect") + ": " + msg + "." + hint
+                        + " Reconnecting in " + backoff / 1000 + " s.");
+                if (wasOnline) backoff = 10_000L;
+            } finally {
+                sshTunnel = null;
+            }
+            try {
+                Thread.sleep(backoff);
+            } catch (InterruptedException e) {
+                break;
+            }
+            backoff = Math.min(backoff * 2, 300_000L);
+        }
+    }
+
     void stop() {
         running = false;
+        SshTunnel t = sshTunnel;
+        if (t != null) t.stop();
         Process p = process;
         if (p != null) {
             p.descendants().forEach(ProcessHandle::destroy);
@@ -134,6 +234,11 @@ final class TunnelManager {
                 Files.createDirectories(home);
                 pb.environment().put("HOME", home.toString());
                 if (provider.equals("ngrok")) pb.environment().put("NGROK_AUTHTOKEN", plugin.getConfig().getString("tunnel.ngrok.authtoken", "").trim());
+                if (provider.equals("tuna")) {
+                    String key = plugin.getConfig().getString("tunnel.tuna.api-key", "").trim();
+                    pb.environment().put("TUNA_API_KEY", key);
+                    pb.environment().put("TUNA_TOKEN", key);
+                }
                 state = "starting " + provider + " agent";
                 publicUrl = null;
                 plugin.getLogger().info("Tunnel: starting " + provider + " agent for " + target);
@@ -152,8 +257,8 @@ final class TunnelManager {
                         if (url != null && !url.equals(publicUrl)) {
                             publicUrl = url;
                             urlAt = now;
-                            // ngrok prints the URL once the session is up; cloudflared prints it before connecting to the edge.
-                            connected = provider.equals("ngrok");
+                            // ngrok and tuna print the URL once the session is up; cloudflared prints it before connecting to the edge.
+                            connected = !provider.equals("cloudflare");
                             state = connected ? "online" : "address assigned, connecting to Cloudflare";
                             backoff = 10_000L;
                             Files.writeString(dataDir.resolve("tunnel-url.txt"), url + System.lineSeparator(), StandardCharsets.UTF_8);
@@ -234,6 +339,11 @@ final class TunnelManager {
             if (localTls) cmd.add("--no-tls-verify");
             cmd.add("--url");
             cmd.add(target);
+        } else if (provider.equals("tuna")) {
+            cmd.add("http");
+            cmd.add(target.substring(target.lastIndexOf(':') + 1));
+            String sub = c.getString("tunnel.tuna.subdomain", "").trim();
+            if (!sub.isEmpty()) cmd.add("--subdomain=" + sub);
         } else {
             cmd.add("http");
             cmd.add(target);
@@ -251,7 +361,18 @@ final class TunnelManager {
     }
 
     /** Finds the public URL in one line of agent output (ngrok: JSON logs, cloudflared: plain text). */
-    static String extractUrl(String provider, String line) {
+    static String extractUrl(String provider, String rawLine) {
+        // Terminal styling may arrive as real escape codes or, inside JSON strings, as the text "\u001b[1m".
+        String line = rawLine.replaceAll("\\\\u001[bB]\\[[0-9;?]*[ -/]*[@-~]", " ")
+                .replaceAll("\u001B\\[[0-9;?]*[ -/]*[@-~]", " ");
+        if (provider.equals("localhostrun")) {
+            Matcher m = LHR_HOST.matcher(line);
+            return m.find() ? "https://" + m.group(1) : null;
+        }
+        if (provider.equals("tuna") || provider.equals("tuna-ssh")) {
+            Matcher m = TUNA_HOST.matcher(line);
+            return m.find() ? "https://" + m.group(1) : null;
+        }
         if (provider.equals("ngrok")) {
             String t = line.trim();
             if (t.startsWith("{")) {
@@ -294,13 +415,22 @@ final class TunnelManager {
         if (arch == null) throw new IOException("unsupported CPU architecture " + archProp);
         Path dir = dataDir.resolve("bin");
         Files.createDirectories(dir);
-        Path bin = dir.resolve(provider.equals("ngrok") ? "ngrok" : "cloudflared");
+        Path bin = dir.resolve(provider.equals("ngrok") ? "ngrok" : provider.equals("tuna") ? "tuna" : "cloudflared");
         if (Files.isRegularFile(bin) && Files.size(bin) > 1_000_000) {
             bin.toFile().setExecutable(true);
             return bin;
         }
         state = "downloading " + provider + " agent";
-        if (provider.equals("ngrok")) {
+        if (provider.equals("tuna")) {
+            String url = "https://releases.tuna.am/tuna/latest/tuna_linux_" + arch + ".tar.gz";
+            plugin.getLogger().info("Tunnel: downloading " + url);
+            Path tgz = download(url, dir.resolve("tuna.tgz.part"));
+            try {
+                extractFromTarGz(tgz, "tuna", bin);
+            } finally {
+                Files.deleteIfExists(tgz);
+            }
+        } else if (provider.equals("ngrok")) {
             String url = "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-" + arch + ".tgz";
             plugin.getLogger().info("Tunnel: downloading " + url);
             Path tgz = download(url, dir.resolve("ngrok.tgz.part"));
