@@ -245,7 +245,7 @@ final class DbService {
         if (s.contains(";")) throw new ApiException(400, "only one statement per request (use params instead of ';' in values)");
         String first = s.split("\\s+", 2)[0].toUpperCase(Locale.ROOT);
         if (!READ_ONLY_KEYWORDS.contains(first)) {
-            throw new ApiException(403, "only read-only queries are allowed (SELECT, WITH, PRAGMA, EXPLAIN, SHOW, DESCRIBE)");
+            throw new ApiException(403, "only read-only queries are allowed (SELECT, WITH, PRAGMA, EXPLAIN, SHOW, DESCRIBE, DESC, VALUES)");
         }
         return s;
     }

@@ -58,14 +58,48 @@ final class FileService {
             }
         }
         String rel = rel(target);
+        if (isSecret(rel)) {
+            throw new ApiException(403, "this path holds a ClaudeBridge secret (API token or private key) and is never readable through the API");
+        }
+        if (isDeniedByConfig(rel)) throw new ApiException(403, "path is denied by files.deny in config.yml");
+        return target;
+    }
+
+    private boolean isDeniedByConfig(String rel) {
         for (String deny : plugin.getConfig().getStringList("files.deny")) {
             String d = deny.trim().replace('\\', '/');
             while (d.endsWith("/")) d = d.substring(0, d.length() - 1);
-            if (!d.isEmpty() && (rel.equals(d) || rel.startsWith(d + "/"))) {
-                throw new ApiException(403, "path is denied by files.deny in config.yml");
-            }
+            if (!d.isEmpty() && (rel.equals(d) || rel.startsWith(d + "/"))) return true;
         }
-        return target;
+        return false;
+    }
+
+    /**
+     * The plugin's own secrets: the API token, the SSH key of the tunnel, TLS and ACME private keys. Whoever holds the
+     * token can already use the API, but these files must not end up in an agent's context, logs or answers.
+     */
+    private boolean isSecret(String rel) {
+        Path data = plugin.getDataFolder().toPath().toAbsolutePath().normalize();
+        try {
+            if (Files.exists(data)) data = data.toRealPath();
+        } catch (IOException ignored) {
+            // keep the normalized path
+        }
+        String d = rel(data);
+        if (rel.equals(d + "/token.txt") || rel.equals(d + "/tls.p12") || rel.equals(d + "/tls.pass") || rel.equals(d + "/key.pem")) return true;
+        if (rel.equals(d + "/acme") || rel.startsWith(d + "/acme/")) return true;
+        if (rel.startsWith(d + "/ssh/") && !rel.endsWith(".pub")) return true;
+        String key = plugin.getConfig().getString("http.tls.files.private-key", "");
+        if (key != null && !key.isBlank()) {
+            Path k = root().resolve(key.trim()).normalize();
+            try {
+                if (Files.exists(k)) k = k.toRealPath();
+            } catch (IOException ignored) {
+                // compare the normalized path
+            }
+            if (k.startsWith(root()) && rel.equals(rel(k))) return true;
+        }
+        return false;
     }
 
     String rel(Path p) {
@@ -168,6 +202,7 @@ final class FileService {
         List<Path> files;
         try (Stream<Path> s = Files.walk(dir, 12)) {
             files = s.filter(Files::isRegularFile)
+                    .filter(x -> !isSecret(rel(x)) && !isDeniedByConfig(rel(x)))
                     .filter(x -> matcher == null || matcher.matches(x.getFileName()) || matcher.matches(dir.relativize(x)))
                     .filter(x -> {
                         try {

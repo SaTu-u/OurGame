@@ -90,6 +90,8 @@ final class Avatar implements Listener {
     private Mannequin entity;
     private int heldSlot;
     private Task task;
+    /** Result of the most recently finished task, so a caller whose request timed out can still read it. */
+    private volatile Map<String, Object> lastTask;
     private Location savedLocation;
     private String savedWorld;
     private boolean savedSpawned;
@@ -172,11 +174,11 @@ final class Avatar implements Listener {
         if (isSpawned()) {
             cancelTask("avatar was moved by spawn");
             loadAround(loc);
-            entity.teleport(snapToGround(loc));
+            entity.teleport(safeSpot(loc));
             return map("status", "teleported", "state", state());
         }
         loadAround(loc);
-        spawnAt(snapToGround(loc));
+        spawnAt(safeSpot(loc));
         return map("status", "spawned", "state", state());
     }
 
@@ -244,7 +246,10 @@ final class Avatar implements Listener {
     void respawnFromStateIfNeeded() {
         if (isSpawned() || !savedSpawned || !plugin.getConfig().getBoolean("avatar.respawn-on-start", true)) return;
         Location l = savedLocation();
-        if (l != null && plugin.feature("avatar")) spawnAt(l);
+        if (l != null && plugin.feature("avatar")) {
+            loadAround(l);
+            spawnAt(safeSpot(l));
+        }
     }
 
     private Location savedLocation() {
@@ -326,7 +331,10 @@ final class Avatar implements Listener {
             return;
         }
         tickCounter++;
-        if (tickCounter % 10 == 0) updateTickets();
+        if (tickCounter % 10 == 0) {
+            updateTickets();
+            unstickIfBuried();
+        }
         if (tickCounter % 4 == 0) autoPickup();
         if (tickCounter % 1200 == 0) saveState();
         Task t = task;
@@ -484,6 +492,74 @@ final class Avatar implements Listener {
         return out;
     }
 
+    private int buriedChecks;
+
+    /**
+     * A place where the avatar's whole body fits: the requested spot when it is clear, otherwise the centre of the
+     * nearest free block with ground below (up to 4 blocks away). Exact decimal positions near walls are kept when the
+     * body does not touch them; a position on a block edge inside a wall is moved, so the avatar never suffocates.
+     */
+    private static Location safeSpot(Location wanted) {
+        Location snapped = snapToGround(wanted);
+        if (bodyClear(snapped)) return snapped;
+        World w = wanted.getWorld();
+        int bx = snapped.getBlockX();
+        int by = (int) Math.floor(snapped.getY() + 1e-6);
+        int bz = snapped.getBlockZ();
+        for (int r = 0; r <= 4; r++) {
+            for (int dx = -r; dx <= r; dx++) {
+                for (int dz = -r; dz <= r; dz++) {
+                    if (Math.max(Math.abs(dx), Math.abs(dz)) != r) continue;
+                    for (int dy : new int[]{0, 1, -1, 2, -2, 3, -3}) {
+                        if (!PathFinder.walkable(w, bx + dx, by + dy, bz + dz)) continue;
+                        Location c = snapToGround(new Location(w, bx + dx + 0.5, by + dy, bz + dz + 0.5, wanted.getYaw(), wanted.getPitch()));
+                        if (bodyClear(c)) return c;
+                    }
+                }
+            }
+        }
+        return snapped;
+    }
+
+    /** True when a player-sized body (0.6 x 1.8) standing at the location touches no solid block. */
+    private static boolean bodyClear(Location l) {
+        World w = l.getWorld();
+        BoundingBox body = new BoundingBox(l.getX() - 0.3, l.getY() + 0.01, l.getZ() - 0.3, l.getX() + 0.3, l.getY() + 1.8, l.getZ() + 0.3);
+        for (int x = (int) Math.floor(body.getMinX()); x <= (int) Math.floor(body.getMaxX()); x++) {
+            for (int y = (int) Math.floor(body.getMinY()); y <= (int) Math.floor(body.getMaxY()); y++) {
+                for (int z = (int) Math.floor(body.getMinZ()); z <= (int) Math.floor(body.getMaxZ()); z++) {
+                    Block b = PathFinder.block(w, x, y, z);
+                    if (b == null) continue;
+                    if (b.isPassable() || b.isLiquid()) continue;
+                    for (BoundingBox part : b.getCollisionShape().getBoundingBoxes()) {
+                        if (part.shift(x, y, z).overlaps(body)) return false;
+                    }
+                }
+            }
+        }
+        return true;
+    }
+
+    /** Called twice a second: if the avatar ends up inside blocks (and would suffocate), step out to a free spot. */
+    private void unstickIfBuried() {
+        if (entity == null || !entity.isValid()) return;
+        Location l = entity.getLocation();
+        if (bodyClear(l)) {
+            buriedChecks = 0;
+            return;
+        }
+        if (++buriedChecks < 2) return;
+        buriedChecks = 0;
+        Location to = safeSpot(l);
+        if (bodyClear(to)) {
+            entity.teleport(to);
+            fallVelocity = 0;
+            fallDistance = 0;
+            plugin.chat().add("avatar", name(), String.format(Locale.ROOT,
+                    "stepped out of a block it was stuck in, now at %.1f %.1f %.1f", to.getX(), to.getY(), to.getZ()));
+        }
+    }
+
     /** Synchronously loads and tickets the chunks around a location before the avatar is put there. */
     private void loadAround(Location l) {
         World w = l.getWorld();
@@ -562,6 +638,7 @@ final class Avatar implements Listener {
             m.put("lookingAt", null);
         }
         m.put("task", task == null ? null : map("name", task.name, "status", task.status));
+        m.put("lastTask", lastTask);
         List<Map<String, Object>> players = new ArrayList<>();
         List<Map<String, Object>> others = new ArrayList<>();
         List<Entity> near = new ArrayList<>(e.getNearbyEntities(24, 12, 24));
@@ -716,6 +793,7 @@ final class Avatar implements Listener {
         Mannequin e = requireEntity();
         String q = r.require("block").trim().toUpperCase(Locale.ROOT);
         boolean contains = r.bool("contains", Material.matchMaterial(q) == null);
+        boolean onlyExposed = r.bool("exposed", false);
         Material exact = contains ? null : Material.matchMaterial(q);
         int radius = Math.max(1, Math.min(r.integer("radius", 16), 32));
         int limit = Math.max(1, Math.min(r.integer("limit", 20), 100));
@@ -730,6 +808,7 @@ final class Avatar implements Listener {
                 for (int y = minY; y <= maxY; y++) {
                     Material m = w.getBlockAt(x, y, z).getType();
                     if (exact != null ? m == exact : m.name().contains(q)) {
+                        if (onlyExposed && !exposed(w, x, y, z)) continue;
                         double d = l.distance(new Location(w, x + 0.5, y + 0.5, z + 0.5));
                         found.add(new Object[]{d, x, y, z, m.name()});
                     }
@@ -739,9 +818,25 @@ final class Avatar implements Listener {
         found.sort(Comparator.comparingDouble(o -> (double) o[0]));
         List<Map<String, Object>> out = new ArrayList<>();
         for (Object[] o : found.subList(0, Math.min(limit, found.size()))) {
-            out.add(map("type", o[4], "block", List.of(o[1], o[2], o[3]), "distance", r1((double) o[0])));
+            out.add(map("type", o[4], "block", List.of(o[1], o[2], o[3]), "distance", r1((double) o[0]),
+                    "exposed", exposed(w, (int) o[1], (int) o[2], (int) o[3])));
         }
-        return map("query", q, "radius", radius, "totalFound", found.size(), "nearest", out);
+        return map("query", q, "radius", radius, "exposed", onlyExposed, "totalFound", found.size(), "nearest", out);
+    }
+
+    /** True when at least one side of the block touches air or another block you can walk through (so it can be reached). */
+    private static boolean exposed(World w, int x, int y, int z) {
+        int[][] sides = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+        for (int[] d : sides) {
+            int nx = x + d[0];
+            int ny = y + d[1];
+            int nz = z + d[2];
+            if (ny < w.getMinHeight() || ny >= w.getMaxHeight()) continue;
+            if (!w.isChunkLoaded(nx >> 4, nz >> 4)) continue;
+            Block n = w.getBlockAt(nx, ny, nz);
+            if (n.isPassable() && !n.isLiquid()) return true;
+        }
+        return false;
     }
 
     Map<String, Object> inventory() {
@@ -839,7 +934,7 @@ final class Avatar implements Listener {
         }
         cancelTask("teleported");
         loadAround(to);
-        e.teleport(snapToGround(to));
+        e.teleport(safeSpot(to));
         fallVelocity = 0;
         fallDistance = 0;
         return map("status", "ok", "position", pos(e.getLocation()));
@@ -1038,8 +1133,14 @@ final class Avatar implements Listener {
             case FURNACE, BLAST_FURNACE, SMOKER -> "slot 0 = input, 1 = fuel, 2 = result";
             default -> null;
         };
-        return map("container", b.getType().name(), "block", List.of(b.getX(), b.getY(), b.getZ()),
+        Map<String, Object> view = map("container", b.getType().name(), "block", List.of(b.getX(), b.getY(), b.getZ()),
                 "size", ci.getSize(), "slots", slots, "hint", hint);
+        if (c instanceof org.bukkit.block.Furnace f) {
+            // Ticks: 20 per second. cookTime counts up to cookTimeTotal for the item in slot 0; burnTime is fuel left.
+            view.put("furnace", map("burning", f.getBurnTime() > 0, "fuelTicksLeft", (int) f.getBurnTime(),
+                    "cookTicks", (int) f.getCookTime(), "cookTicksTotal", f.getCookTimeTotal()));
+        }
+        return view;
     }
 
     Map<String, Object> containerPut(Request r) {
@@ -1508,6 +1609,9 @@ final class Avatar implements Listener {
         boolean finish(Map<String, Object> result) {
             status = String.valueOf(result.get("status"));
             result.putIfAbsent("task", name);
+            Map<String, Object> last = new LinkedHashMap<>(result);
+            last.put("finishedAt", java.time.Instant.now().toString());
+            lastTask = last;
             done.complete(result);
             return true;
         }
@@ -1704,7 +1808,9 @@ final class Avatar implements Listener {
             if (progress < total) return false;
             sendDamage(e, 0f);
             Location center = block.getLocation().add(0.5, 0.5, 0.5);
-            boolean broken = block.breakNaturally(toolOrEmpty(), true, false);
+            // breakNaturally answers whether items dropped; whether the block is gone is checked separately.
+            boolean dropped = block.breakNaturally(toolOrEmpty(), true, false);
+            boolean broken = block.getType() != type;
             List<String> got = new ArrayList<>();
             for (Item it : center.getWorld().getNearbyEntitiesByType(Item.class, center, 1.5)) {
                 if (it.getTicksLived() > 2) continue;
@@ -1714,7 +1820,19 @@ final class Avatar implements Listener {
             }
             damageTool(1);
             syncEquipment();
-            return finish(ok("broken", broken, "block", type.name(), "ticks", total, "collected", got));
+            Map<String, Object> res = ok("broken", broken, "block", type.name(), "ticks", total, "collected", got);
+            if (broken && !dropped) {
+                res.put("note", "nothing dropped: " + type.name() + " needs " + rightTool(type) + " to drop items");
+            }
+            return finish(res);
+        }
+
+        private String rightTool(Material m) {
+            if (Tag.MINEABLE_PICKAXE.isTagged(m)) return "a pickaxe (iron ores and harder need a stone pickaxe or better)";
+            if (Tag.MINEABLE_AXE.isTagged(m)) return "an axe";
+            if (Tag.MINEABLE_SHOVEL.isTagged(m)) return "a shovel";
+            if (Tag.MINEABLE_HOE.isTagged(m)) return "a hoe";
+            return "a better tool";
         }
 
         private void sendDamage(Mannequin e, float progress) {
