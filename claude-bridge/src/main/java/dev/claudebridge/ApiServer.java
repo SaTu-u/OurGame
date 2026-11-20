@@ -277,6 +277,12 @@ final class ApiServer {
         if (r.body == null) return r.query.isEmpty() ? "" : r.query.toString();
         JsonObject copy = r.body.deepCopy();
         if (copy.has("password")) copy.addProperty("password", "***");
+        for (String key : List.copyOf(copy.keySet())) {
+            JsonElement v = copy.get(key);
+            if (v.isJsonPrimitive() && v.getAsJsonPrimitive().isString() && v.getAsString().length() > 300) {
+                copy.addProperty(key, v.getAsString().substring(0, 300) + "… (" + v.getAsString().length() + " chars)");
+            }
+        }
         return copy.toString();
     }
 

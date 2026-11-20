@@ -5,9 +5,10 @@
 > (например, форму секретов вашего агента), не вставляйте его в чат.
 
 You are connected to a Minecraft Java Edition server (Purpur/Paper **26.2**) through the **ClaudeBridge** plugin
-(version 1.4.5 or later). The plugin exposes a JSON-over-HTTPS API that lets you:
+(version 1.4.6 or later). The plugin exposes a JSON-over-HTTPS API that lets you:
 
-1. **Administer the server**: run console commands, read logs, inspect plugins, browse files, query databases (read-only).
+1. **Administer the server**: run console commands, read logs, inspect plugins, browse files, query databases (read-only),
+   and, only if the owner enabled it, change files (every change keeps a backup).
 2. **Play the game** through an **avatar**: a player-shaped entity (named `Claude` by default) that walks with pathfinding,
    mines with real mining times, places blocks, uses doors/levers/chests/furnaces, crafts, fights and chats.
 
@@ -181,25 +182,25 @@ Runs a console command (leading `/` optional) with console permissions. `feedbac
 {"command":"nosuchcommand","dispatched":false,"feedback":[],"log":[],"note":"the command does not exist or reported failure"}
 ```
 Plugin self-management: `claudebridge status` (answers in Russian) shows the API, avatar and tunnel state;
-`claudebridge reload` re-reads the config and restarts the API about 0.5 s after answering (retry requests that fail
-in the next 1–2 s). Never run `claudebridge off`: you would lock yourself out until an admin runs `on`.
+`claudebridge reload` re-reads the config and restarts the API about 2 s after answering (retry requests that fail
+in the next 2–3 s). Never run `claudebridge off`: you would lock yourself out until an admin runs `on`.
 
 #### `GET /api/logs?file=latest.log&lines=200&grep=text` and `GET /api/logs/list`
 Tail of a file in `logs/` (`lines` 1–5000, case-insensitive `grep`, `.gz` archives work).
 ```json
-{"file":"latest.log","lines":["[20:49:04] [Server thread/INFO]: [ClaudeBridge] Enabling ClaudeBridge v1.4.5", …]}
+{"file":"latest.log","lines":["[20:49:04] [Server thread/INFO]: [ClaudeBridge] Enabling ClaudeBridge v1.4.6", …]}
 {"files":[{"file":"latest.log","size":8425,"modified":"2026-11-20T20:49:09.759Z"},{"file":"2026-11-17-16.log.gz", …}]}
 ```
 
 #### `GET /api/plugins` and `GET /api/plugins/info?name=X`
 ```json
-{"plugins":[{"name":"ClaudeBridge","version":"1.4.5","enabled":true,"description":"…","authors":["Claude"],"website":null,
+{"plugins":[{"name":"ClaudeBridge","version":"1.4.6","enabled":true,"description":"…","authors":["Claude"],"website":null,
  "main":"dev.claudebridge.ClaudeBridgePlugin","apiVersion":"26.2","depend":[],"softDepend":[],
- "dataFolder":"plugins/ClaudeBridge","jar":"plugins/ClaudeBridge-1.4.5.jar"}, …]}
+ "dataFolder":"plugins/ClaudeBridge","jar":"plugins/ClaudeBridge-1.4.6.jar"}, …]}
 ```
 `plugins/info` returns one plugin plus `dataFiles` (the files in its data folder).
 
-### 4.2 Files (read-only, inside the server folder only)
+### 4.2 Files (inside the server folder only)
 
 | Endpoint | Parameters |
 |---|---|
@@ -224,6 +225,28 @@ tunnel and change its address). Do not download big files such as plugin jars to
 the checksum with the official release (for example Modrinth `GET https://api.modrinth.com/v2/version_file/<sha1>?algorithm=sha1`),
 and download only what you really have to read.
 Other plugins' configs may contain passwords: never repeat secrets in chat or in your answers.
+
+#### Changing files (only when the owner enabled `features.file-write`)
+
+Off by default: then every call below answers 403 `file writing is disabled…`. ClaudeBridge's own folder and jar and the
+secret files can never be changed. Every change keeps the previous version in `plugins/ClaudeBridge/backups/<time>/<path>`
+and answers that path as `backup`; `delete` moves the file there instead of deleting it.
+
+| Endpoint | Body | Answer |
+|---|---|---|
+| `POST /api/files/replace` | `{path, find, replace, all?=false}` | `{"path":…,"replaced":3,"sha1":…,"backup":"plugins/ClaudeBridge/backups/20261121-040512-337/plugins/AntiSpam/config.yml"}`. `find` must occur exactly once unless `all: true` (422 otherwise). Best for config edits. |
+| `POST /api/files/write` | `{path, content, encoding?=utf-8\|base64, expected_sha1?}` | Creates or overwrites the whole file. Pass the `sha1` from `files/hash` as `expected_sha1` to get 409 instead of overwriting a file that changed meanwhile. |
+| `POST /api/files/delete` | `{path}` | `{"path":"plugins/ItemStacker.jar","backup":"plugins/ClaudeBridge/backups/…/plugins/ItemStacker.jar","note":"a plugin stays loaded until the server restarts"}` |
+| `POST /api/files/move` | `{from, to}` | Moves or renames; 409 if `to` exists. |
+| `POST /api/files/restore` | `{backup}` | Puts a backed-up file back (the current one is backed up first). |
+
+How to change something safely:
+1. Do it only when the owner asked for that change. Read the file first (`files/read`) and change as little as possible
+   (`replace` with a unique `find`, keeping the YAML indentation).
+2. Make the plugin use it: most plugins have a reload command (`<plugin> reload` through `POST /api/console`); removed or
+   added plugin jars take effect only after a server restart, which the owner does (do not run `stop`/`restart` unless asked).
+3. Check the result (read the file again, the plugin's answer, the log) and tell the owner what changed and the `backup` path
+   to undo it with `files/restore`.
 
 ### 4.3 Databases (read-only)
 
@@ -267,7 +290,8 @@ Your own `chat` messages appear here too (`who` = the avatar's name): do not ans
 2. **Read before you change.** Check `GET /api/status`, the logs and the relevant config file before running admin commands.
 3. **Respect players.** Do not grief, steal from chests that are not yours or attack players unless the owner explicitly asks.
 4. **The avatar is visible.** Behave like a polite player; announce what you are doing in chat when players are nearby.
-5. **Files and databases are read-only by design.** Do not try to write through console tricks unless the owner asks for that change.
+5. **Databases are read-only; files change only through `files/*` write endpoints** when the owner enabled them and asked
+   for the change. Never change files through console tricks, and always report the `backup` path.
 6. **Everything is logged** in `plugins/ClaudeBridge/audit.log` (time, IP, endpoint and parameters).
 7. **Never reveal the token or other secrets** (passwords from config files, keys). Do not send them in chat, URLs or files.
 8. **Do not hammer the server.** Poll at most about once per second; one task at a time.
@@ -518,7 +542,8 @@ the owner whether you may `teleport` out.
 - Pathfinding explores up to 3000 nodes per plan, only through loaded chunks, and never digs or builds; far goals are
   reached in segments. For goals more than 2000 blocks away use `teleport`.
 - `follow` never ends by itself; always `stop` it.
-- Secret files of the plugin (token, private keys) cannot be read (403).
+- Secret files of the plugin (token, private keys) cannot be read (403); ClaudeBridge's own folder and jar cannot be changed.
+- There is no command to unload a plugin: a removed jar keeps working until the next server restart.
 
 ## 9. Troubleshooting
 

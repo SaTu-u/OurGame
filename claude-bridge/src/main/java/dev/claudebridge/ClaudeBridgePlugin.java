@@ -220,7 +220,7 @@ public final class ClaudeBridgePlugin extends JavaPlugin {
                 reloadConfig();
                 loadToken();
                 // Delayed, so that a reload requested through the API itself can still send its response.
-                getServer().getScheduler().runTaskLater(this, this::restartApi, 10L);
+                getServer().getScheduler().runTaskLater(this, this::restartApi, 40L);
                 sender.sendMessage(Component.text("Конфиг перечитан, API перезапустится через полсекунды.", NamedTextColor.GREEN));
             }
             case "despawn" -> {

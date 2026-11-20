@@ -175,6 +175,187 @@ final class FileService {
         return m;
     }
 
+    // ------------------------------------------------------------------ writing (opt-in: features.file-write)
+
+    private void checkWritable() {
+        checkEnabled();
+        if (!plugin.getConfig().getBoolean("features.file-write", false)) {
+            throw new ApiException(403, "file writing is disabled; the server owner can enable it with features.file-write: true "
+                    + "in plugins/ClaudeBridge/config.yml (then /claudebridge reload)");
+        }
+    }
+
+    private String dataRel() {
+        Path data = plugin.getDataFolder().toPath().toAbsolutePath().normalize();
+        try {
+            if (Files.exists(data)) data = data.toRealPath();
+        } catch (IOException ignored) {
+            // keep the normalized path
+        }
+        return rel(data);
+    }
+
+    /** A path the API may change: inside the server folder, not a secret, not ClaudeBridge itself, no symlink escape. */
+    private Path writableTarget(String raw) throws IOException {
+        Path target = resolve(raw);
+        String rel = rel(target);
+        String data = dataRel();
+        if (rel.equals(".")) throw new ApiException(403, "the server folder itself cannot be changed");
+        if (rel.equals(data) || rel.startsWith(data + "/")) {
+            throw new ApiException(403, "ClaudeBridge's own folder (config, token, backups) cannot be changed through the API");
+        }
+        if (rel.matches("plugins/[^/]*[Cc]laude[Bb]ridge[^/]*\\.jar")) throw new ApiException(403, "the ClaudeBridge jar cannot be changed through the API");
+        Path parent = target.getParent();
+        while (parent != null && !Files.exists(parent)) parent = parent.getParent();
+        if (parent != null && !parent.toRealPath().startsWith(root())) throw new ApiException(403, "path leads outside of the server directory");
+        return target;
+    }
+
+    private static final java.time.format.DateTimeFormatter STAMP = java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS");
+
+    /** Copies (or moves) a file to plugins/ClaudeBridge/backups/<time>/<path>; answers the backup's path. */
+    private String backup(Path f, boolean move) throws IOException {
+        Path data = plugin.getDataFolder().toPath().toAbsolutePath().normalize();
+        Path dest = data.resolve("backups").resolve(java.time.LocalDateTime.now().format(STAMP)).resolve(rel(f)).normalize();
+        Files.createDirectories(dest.getParent());
+        if (move) Files.move(f, dest);
+        else Files.copy(f, dest, java.nio.file.StandardCopyOption.COPY_ATTRIBUTES);
+        return rel(dest);
+    }
+
+    private static String sha1(byte[] data) {
+        try {
+            return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-1").digest(data));
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private static void writeAtomically(Path target, byte[] data) throws IOException {
+        Files.createDirectories(target.getParent());
+        Path tmp = Files.createTempFile(target.getParent(), ".claudebridge-", ".tmp");
+        try {
+            Files.write(tmp, data);
+            try {
+                Files.move(tmp, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+            } catch (java.nio.file.AtomicMoveNotSupportedException e) {
+                Files.move(tmp, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            }
+        } finally {
+            Files.deleteIfExists(tmp);
+        }
+    }
+
+    /** POST {path, content, encoding?=utf-8|base64, expected_sha1?}: creates or overwrites a file (the old one is backed up). */
+    Object write(Request r) throws IOException {
+        checkWritable();
+        Path f = writableTarget(r.require("path"));
+        String content = r.str("content");
+        if (content == null) throw new ApiException(400, "missing parameter: content");
+        byte[] data = r.str("encoding", "utf-8").equalsIgnoreCase("base64")
+                ? Base64.getDecoder().decode(content) : content.getBytes(StandardCharsets.UTF_8);
+        if (Files.isDirectory(f)) throw new ApiException(422, "that path is a directory");
+        String backup = null;
+        if (Files.isRegularFile(f)) {
+            String expected = r.str("expected_sha1");
+            if (expected != null && !expected.isBlank() && !expected.equalsIgnoreCase(sha1(Files.readAllBytes(f)))) {
+                throw new ApiException(409, "the file changed since you read it (expected_sha1 does not match); read it again");
+            }
+            backup = backup(f, false);
+        } else if (r.has("expected_sha1")) {
+            throw new ApiException(409, "the file does not exist any more");
+        }
+        writeAtomically(f, data);
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("path", rel(f));
+        m.put("size", data.length);
+        m.put("sha1", sha1(data));
+        m.put("backup", backup);
+        plugin.getLogger().info("API changed file " + rel(f) + (backup == null ? " (new file)" : " (backup: " + backup + ")"));
+        return m;
+    }
+
+    /** POST {path, find, replace, all?=false}: replaces text in a text file (exactly one match unless all is true). */
+    Object replace(Request r) throws IOException {
+        checkWritable();
+        Path f = writableTarget(r.require("path"));
+        if (!Files.isRegularFile(f)) throw new ApiException(404, "file not found: " + rel(f));
+        String find = r.str("find");
+        String with = r.str("replace");
+        if (find == null || find.isEmpty()) throw new ApiException(400, "missing parameter: find");
+        if (with == null) throw new ApiException(400, "missing parameter: replace");
+        byte[] old = Files.readAllBytes(f);
+        if (!looksText(old)) throw new ApiException(422, "not a text file; use files/write with base64");
+        String text = new String(old, StandardCharsets.UTF_8);
+        int count = 0;
+        for (int i = text.indexOf(find); i >= 0; i = text.indexOf(find, i + find.length())) count++;
+        if (count == 0) throw new ApiException(422, "the text to replace was not found in " + rel(f));
+        if (count > 1 && !r.bool("all", false)) {
+            throw new ApiException(422, "the text occurs " + count + " times; pass all: true or a longer, unique find text");
+        }
+        String updated = r.bool("all", false) ? text.replace(find, with) : text.replaceFirst(java.util.regex.Pattern.quote(find),
+                java.util.regex.Matcher.quoteReplacement(with));
+        String backup = backup(f, false);
+        byte[] data = updated.getBytes(StandardCharsets.UTF_8);
+        writeAtomically(f, data);
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("path", rel(f));
+        m.put("replaced", r.bool("all", false) ? count : 1);
+        m.put("sha1", sha1(data));
+        m.put("backup", backup);
+        plugin.getLogger().info("API edited file " + rel(f) + " (backup: " + backup + ")");
+        return m;
+    }
+
+    /** POST {path}: removes a file or folder by moving it into the backups (so it can be restored). */
+    Object delete(Request r) throws IOException {
+        checkWritable();
+        Path f = writableTarget(r.require("path"));
+        if (!Files.exists(f, LinkOption.NOFOLLOW_LINKS)) throw new ApiException(404, "not found: " + rel(f));
+        String backup = backup(f, true);
+        plugin.getLogger().info("API removed " + rel(f) + " (kept in " + backup + ")");
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("path", rel(f));
+        m.put("backup", backup);
+        m.put("note", f.toString().endsWith(".jar") ? "a plugin stays loaded until the server restarts" : null);
+        return m;
+    }
+
+    /** POST {from, to}: moves or renames a file or folder; the target must not exist. */
+    Object move(Request r) throws IOException {
+        checkWritable();
+        Path from = writableTarget(r.require("from"));
+        Path to = writableTarget(r.require("to"));
+        if (!Files.exists(from, LinkOption.NOFOLLOW_LINKS)) throw new ApiException(404, "not found: " + rel(from));
+        if (Files.exists(to, LinkOption.NOFOLLOW_LINKS)) throw new ApiException(409, "the target already exists: " + rel(to));
+        Files.createDirectories(to.getParent());
+        Files.move(from, to);
+        plugin.getLogger().info("API moved " + rel(from) + " to " + rel(to));
+        return Map.of("from", rel(from), "to", rel(to));
+    }
+
+    /** POST {backup}: puts a file from plugins/ClaudeBridge/backups/<time>/<path> back to <path> (the current one is backed up). */
+    Object restore(Request r) throws IOException {
+        checkWritable();
+        String b = r.require("backup").trim().replace('\\', '/');
+        String prefix = dataRel() + "/backups/";
+        if (!b.startsWith(prefix)) throw new ApiException(400, "backup must be a path under " + prefix);
+        Path src = resolve(b);
+        if (!Files.isRegularFile(src)) throw new ApiException(404, "backup not found: " + b);
+        String rest = b.substring(prefix.length());
+        int slash = rest.indexOf('/');
+        if (slash < 0) throw new ApiException(400, "backup must look like " + prefix + "<time>/<path>");
+        Path target = writableTarget(rest.substring(slash + 1));
+        String previous = Files.isRegularFile(target) ? backup(target, false) : null;
+        writeAtomically(target, Files.readAllBytes(src));
+        plugin.getLogger().info("API restored " + rel(target) + " from " + b);
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("path", rel(target));
+        m.put("from", b);
+        m.put("backup", previous);
+        return m;
+    }
+
     /** Checksums of one file computed on the server, so its integrity can be checked without downloading it. */
     Object hash(Request r) throws IOException {
         checkEnabled();
