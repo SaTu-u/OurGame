@@ -190,14 +190,48 @@ final class TunnelManager {
     private volatile SshSession currentSsh;
     private volatile String check;
 
+    private final java.util.Set<String> shownLines = new java.util.LinkedHashSet<>();
+    private int throttledSinceNote;
+    private long lastThrottleNote;
+
+    /**
+     * Console output of the service's messages without flooding: plain lines (the banner) only the first time they are
+     * seen, tunnel events always, and speed-limit notices (localhost.run free plan, one per minute while traffic is
+     * heavy) as one explanation and then a summary at most every 30 minutes.
+     */
+    private void logServiceLine(SshSession st, String line, LhrEvent ev) {
+        String type = ev == null || ev.type() == null ? "" : ev.type().toLowerCase(Locale.ROOT);
+        if (type.endsWith("throttled")) {
+            throttledSinceNote++;
+            long now = System.currentTimeMillis();
+            if (lastThrottleNote == 0 || now - lastThrottleNote > 30 * 60_000L) {
+                plugin.getLogger().warning("Tunnel: localhost.run is slowing this tunnel (free plan speed limit"
+                        + (throttledSinceNote > 1 ? ", " + throttledSinceNote + " notices since the last report" : "")
+                        + "): " + readable(line).replaceFirst("^tunnel\\.throttled \\S+: ", "")
+                        + ". Large API transfers are slow; small requests still work. Further notices are summarised every 30 min.");
+                lastThrottleNote = now;
+                throttledSinceNote = 0;
+            }
+            return;
+        }
+        String text = readable(line);
+        if (ev == null) {
+            String key = text.replaceAll("\\d+", "#");
+            synchronized (shownLines) {
+                if (!shownLines.add(key)) return;
+                if (shownLines.size() > 500) shownLines.remove(shownLines.iterator().next());
+            }
+        }
+        if (st.logged >= 80) return;
+        st.logged++;
+        plugin.getLogger().info("Tunnel service: " + text);
+        if (st.logged == 80) plugin.getLogger().info("Tunnel: further messages from the service are not shown");
+    }
+
     private void onSshLine(SshSession st, String line) {
         remember(line);
-        if (st.logged < 80) {
-            st.logged++;
-            plugin.getLogger().info("Tunnel service: " + readable(line));
-            if (st.logged == 80) plugin.getLogger().info("Tunnel: further messages from the service are not shown");
-        }
         LhrEvent ev = provider.equals("localhostrun") ? lhrEvent(line) : null;
+        logServiceLine(st, line, ev);
         if (ev != null && ev.removal()) {
             String gone = ev.host() == null ? null : "https://" + ev.host();
             String current = publicUrl;
@@ -256,13 +290,20 @@ final class TunnelManager {
                         message = cleanEscapes(message).replaceAll("\\s*\\R\\s*", " | ").replaceAll("[ |]+$", "").strip();
                         if (!message.isEmpty()) b.append(": ").append(message);
                     }
-                    return shorten(b.toString(), 600);
+                    return shorten(maskEmails(b.toString()), 600);
                 }
             } catch (RuntimeException ignored) {
                 // not JSON after all
             }
         }
-        return shorten(cleanEscapes(line).strip(), 600);
+        return shorten(maskEmails(cleanEscapes(line).strip()), 600);
+    }
+
+    private static final Pattern EMAIL = Pattern.compile("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}");
+
+    /** The service names the account's e-mail address; console screenshots get shared, so it is never printed. */
+    static String maskEmails(String s) {
+        return EMAIL.matcher(s).replaceAll("<account e-mail>");
     }
 
     private static String shorten(String s, int max) {

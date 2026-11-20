@@ -5,7 +5,7 @@
 > (например, форму секретов вашего агента), не вставляйте его в чат.
 
 You are connected to a Minecraft Java Edition server (Purpur/Paper **26.2**) through the **ClaudeBridge** plugin
-(version 1.4.4 or later). The plugin exposes a JSON-over-HTTPS API that lets you:
+(version 1.4.5 or later). The plugin exposes a JSON-over-HTTPS API that lets you:
 
 1. **Administer the server**: run console commands, read logs, inspect plugins, browse files, query databases (read-only).
 2. **Play the game** through an **avatar**: a player-shaped entity (named `Claude` by default) that walks with pathfinding,
@@ -187,15 +187,15 @@ in the next 1–2 s). Never run `claudebridge off`: you would lock yourself out 
 #### `GET /api/logs?file=latest.log&lines=200&grep=text` and `GET /api/logs/list`
 Tail of a file in `logs/` (`lines` 1–5000, case-insensitive `grep`, `.gz` archives work).
 ```json
-{"file":"latest.log","lines":["[20:49:04] [Server thread/INFO]: [ClaudeBridge] Enabling ClaudeBridge v1.4.4", …]}
+{"file":"latest.log","lines":["[20:49:04] [Server thread/INFO]: [ClaudeBridge] Enabling ClaudeBridge v1.4.5", …]}
 {"files":[{"file":"latest.log","size":8425,"modified":"2026-11-20T20:49:09.759Z"},{"file":"2026-11-17-16.log.gz", …}]}
 ```
 
 #### `GET /api/plugins` and `GET /api/plugins/info?name=X`
 ```json
-{"plugins":[{"name":"ClaudeBridge","version":"1.4.4","enabled":true,"description":"…","authors":["Claude"],"website":null,
+{"plugins":[{"name":"ClaudeBridge","version":"1.4.5","enabled":true,"description":"…","authors":["Claude"],"website":null,
  "main":"dev.claudebridge.ClaudeBridgePlugin","apiVersion":"26.2","depend":[],"softDepend":[],
- "dataFolder":"plugins/ClaudeBridge","jar":"plugins/ClaudeBridge-1.4.4.jar"}, …]}
+ "dataFolder":"plugins/ClaudeBridge","jar":"plugins/ClaudeBridge-1.4.5.jar"}, …]}
 ```
 `plugins/info` returns one plugin plus `dataFiles` (the files in its data folder).
 
@@ -206,6 +206,7 @@ Tail of a file in `logs/` (`lines` 1–5000, case-insensitive `grep`, `.gz` arch
 | `GET /api/files/list` | `path` (default: server root), `depth` 1–5 (default 1), `max` (default 1000) |
 | `GET /api/files/read` | `path`, `offset` (bytes, default 0), `limit` (bytes, default and max 1 MB), `encoding` = `auto` / `utf-8` / `base64` |
 | `GET /api/files/find` | `path`, `pattern` (glob such as `**/*.yml` or `config.yml`), `max` (default 200) |
+| `GET /api/files/hash` | `path`: answers `size`, `sha1`, `sha256`, `sha512` computed on the server |
 | `GET /api/files/grep` | `path`, `text` (case-insensitive), optional `pattern` (file glob), `max` (default 200); files over 2 MB are skipped |
 
 ```json
@@ -213,10 +214,15 @@ Tail of a file in `logs/` (`lines` 1–5000, case-insensitive `grep`, `.gz` arch
 {"path":"server.properties","size":1792,"offset":0,"length":200,"truncated":true,"encoding":"utf-8","content":"#Minecraft server properties\n…"}
 {"matches":[{"path":"plugins/ClaudeBridge/config.yml","dir":false,"size":8144,"modified":"…"}]}
 {"matches":[{"path":"server.properties","line":47,"text":"online-mode=false"}],"truncated":false}
+{"path":"plugins/Chunky-Bukkit-1.5.3.jar","size":304616,"sha1":"7ff47ee3afec89a1725e6eef393f373c549eff3b","sha256":"530d2c74…","sha512":"…"}
 {"error":"path is outside of the server directory"}                                                      // 403
 {"error":"this path holds a ClaudeBridge secret (API token or private key) and is never readable through the API"} // 403
 ```
 Large files: read in pieces with `offset` and `limit` until `truncated` is false. Binary files come back as base64.
+**Free tunnels are slow** (localhost.run free plan: about 1 MB per minute, and heavy traffic makes the service throttle the
+tunnel and change its address). Do not download big files such as plugin jars to inspect them: use `files/hash` and compare
+the checksum with the official release (for example Modrinth `GET https://api.modrinth.com/v2/version_file/<sha1>?algorithm=sha1`),
+and download only what you really have to read.
 Other plugins' configs may contain passwords: never repeat secrets in chat or in your answers.
 
 ### 4.3 Databases (read-only)

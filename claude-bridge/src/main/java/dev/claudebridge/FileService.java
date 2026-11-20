@@ -175,6 +175,42 @@ final class FileService {
         return m;
     }
 
+    /** Checksums of one file computed on the server, so its integrity can be checked without downloading it. */
+    Object hash(Request r) throws IOException {
+        checkEnabled();
+        Path f = resolve(r.require("path"));
+        if (!Files.isRegularFile(f)) throw new ApiException(404, "file not found: " + rel(f));
+        java.security.MessageDigest sha1;
+        java.security.MessageDigest sha256;
+        java.security.MessageDigest sha512;
+        try {
+            sha1 = java.security.MessageDigest.getInstance("SHA-1");
+            sha256 = java.security.MessageDigest.getInstance("SHA-256");
+            sha512 = java.security.MessageDigest.getInstance("SHA-512");
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new ApiException(500, "hash algorithm missing: " + e.getMessage());
+        }
+        long size = 0;
+        byte[] buf = new byte[1 << 16];
+        try (java.io.InputStream in = Files.newInputStream(f)) {
+            int n;
+            while ((n = in.read(buf)) > 0) {
+                sha1.update(buf, 0, n);
+                sha256.update(buf, 0, n);
+                sha512.update(buf, 0, n);
+                size += n;
+            }
+        }
+        java.util.HexFormat hex = java.util.HexFormat.of();
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("path", rel(f));
+        m.put("size", size);
+        m.put("sha1", hex.formatHex(sha1.digest()));
+        m.put("sha256", hex.formatHex(sha256.digest()));
+        m.put("sha512", hex.formatHex(sha512.digest()));
+        return m;
+    }
+
     Object find(Request r) throws IOException {
         checkEnabled();
         Path dir = resolve(r.str("path", ""));

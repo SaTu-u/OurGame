@@ -35,6 +35,7 @@ final class Routes {
         // --- files (read-only)
         api.route("GET", "/api/files/list", "?path=plugins&depth=1&max=1000: directory listing", files::list);
         api.route("GET", "/api/files/read", "?path=server.properties&offset=0&limit=...&encoding=auto|utf-8|base64", files::read);
+        api.route("GET", "/api/files/hash", "?path=plugins/X.jar: size, SHA-1, SHA-256 and SHA-512 of a file (check a jar against its official release without downloading it)", files::hash);
         api.route("GET", "/api/files/find", "?path=plugins&pattern=**/*.yml: find files by glob", files::find);
         api.route("GET", "/api/files/grep", "?path=plugins&text=...&pattern=*.yml: search text in files", files::grep);
 
