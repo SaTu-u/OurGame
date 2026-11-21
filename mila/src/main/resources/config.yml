@@ -1,0 +1,69 @@
+# Mila: a companion for every player. Command: /mila (help: /mila help)
+# Changes apply after /mila reload.
+
+# Default name; every player can rename their own companion with /mila name <имя>.
+name: 'Мила'
+
+# Her skin comes from the server resource pack: assets/mila/textures/entity/mila.png. model: slim or wide.
+# Players who have not loaded the server pack would see a purple-black "missing texture" instead, so for them
+# she is shown with a built-in game skin (fallback). '' turns this off (fine when require-resource-pack=true).
+skin:
+  texture: 'mila:entity/mila'
+  model: slim
+  fallback: 'minecraft:entity/player/slim/kai'
+
+walk-speed: 4.6          # blocks per second (a walking player does 4.3, a sprinting one 5.6)
+run-speed: 6.2           # when she is far behind, fighting or coming for a hug
+follow-distance: 2.5     # she stops this close to her owner
+teleport-distance: 24    # farther than this (or stuck for 5 s, or another world): she teleports to her owner
+path-nodes: 2000         # path search limit per plan (she plans about once a second while walking)
+
+affection:               # 0..100, grows while you spend time together and from gifts
+  minutes-per-point: 3   # +1 for every N minutes she is out and within 16 blocks of her owner
+  hug: 10                # needed for /mila hug
+  kiss: 40               # needed for /mila kiss (a kiss on the cheek)
+  owner-hit: -5          # when her owner hits her
+
+cooldown-seconds:
+  hug: 15
+  kiss: 45
+
+# Gifts: item id or #item_tag -> affection. 'nmk' = the four NMK cocktails
+# (potions of regeneration, strength, swiftness, invisibility). The potion bottle comes back empty.
+gifts-per-day: 6
+gifts:
+  '#flowers': 3
+  cookie: 2
+  sweet_berries: 2
+  glow_berries: 2
+  apple: 2
+  pumpkin_pie: 4
+  cake: 10
+  golden_apple: 6
+  diamond: 5
+  nmk: 6
+
+defend-owner: true       # she attacks monsters that target her owner or that her owner hits (not creepers)
+attack-damage: 4.0       # per hit, about one hit a second
+
+chatter-minutes: 5       # she says something about every N minutes (0 = never); only her owner sees it
+phrases:
+  - 'Как же хорошо гулять вместе!'
+  - 'Смотри, какое небо!'
+  - 'Может, построим домик?'
+  - 'Я бы сейчас выпила Клубничный НМК…'
+  - 'Осторожно, тут могут быть монстры!'
+  - 'С тобой не страшно, {player}!'
+  - 'Если что, я тебя защищу!'
+  - 'Давай поищем алмазы? Говорят, их стало совсем мало…'
+  - 'Чем займёмся?'
+  - 'Мне нравится этот мир.'
+click-phrases:
+  - 'Да, {player}?'
+  - 'Я тут!'
+  - 'Что такое?'
+  - 'Хи-хи ❤'
+  - 'Звал меня?'
+  - 'Пойдём куда-нибудь?'
+
+debug: false             # log fights and clicks to the console

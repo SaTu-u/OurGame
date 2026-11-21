@@ -1,4 +1,5 @@
-# Builds the NMK resource pack: potion names and bottle models for regeneration, strength, swiftness, invisibility.
+# Builds the server resource pack: NMK potion names and bottle models (regeneration, strength, swiftness, invisibility)
+# and the skin of Mila, the companion from the Mila plugin.
 # Usage: python3 build_pack.py  ->  ../dist/NMK-pack.zip (deterministic: same input, same bytes and SHA-1)
 import hashlib
 import io
@@ -22,7 +23,7 @@ FAMILIES = {
 }
 
 # Minecraft 26.2 uses resource pack format 88, 26.3 uses 97.
-PACK_MCMETA = {'pack': {'description': 'НМК: молочные коктейли вместо зелий', 'min_format': 88, 'max_format': 97}}
+PACK_MCMETA = {'pack': {'description': 'НМК вместо зелий и скин Милы', 'min_format': 88, 'max_format': 97}}
 
 # Vanilla assets/minecraft/items/potion.json (26.2/26.3): every other potion keeps its normal look.
 VANILLA_POTION_MODEL = {'type': 'minecraft:model', 'model': 'minecraft:item/potion',
@@ -50,11 +51,15 @@ def files():
 def main():
     tex_dir = os.path.join(BUILD, 'textures')
     subprocess.run([sys.executable, os.path.join(HERE, 'draw_textures.py'), tex_dir], check=True)
+    skin_dir = os.path.join(BUILD, 'skin')
+    subprocess.run([sys.executable, os.path.join(HERE, 'draw_skin.py'), skin_dir], check=True)
     os.makedirs(DIST, exist_ok=True)
     zpath = os.path.join(DIST, 'NMK-pack.zip')
     entries = files()
     for _, (tex, _, _) in FAMILIES.items():
         entries[f'assets/nmk/textures/item/{tex}.png'] = open(os.path.join(tex_dir, tex + '.png'), 'rb').read()
+    # Mila's skin: the plugin's mannequin points its profile texture at mila:entity/mila
+    entries['assets/mila/textures/entity/mila.png'] = open(os.path.join(skin_dir, 'mila.png'), 'rb').read()
     # pack icon: the four bottles side by side, scaled to 128x128
     from PIL import Image
     icon = Image.new('RGBA', (64, 64), (0, 0, 0, 0))

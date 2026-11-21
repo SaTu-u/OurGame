@@ -1,0 +1,18 @@
+name: Mila
+version: '1.0.0'
+main: dev.ourgame.mila.MilaPlugin
+api-version: '26.2'
+description: 'A companion for every player: she follows you, defends you from monsters, carries a backpack, takes gifts, hugs and kisses on the cheek'
+authors: [Claude]
+commands:
+  mila:
+    description: Твоя подруга Мила
+    usage: /<command> [follow|stay|hug|kiss|gift|bag|info|name|bye|help]
+    permission: mila.use
+permissions:
+  mila.use:
+    description: Allows calling your own companion with /mila
+    default: true
+  mila.admin:
+    description: Allows /mila reload
+    default: op
