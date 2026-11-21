@@ -119,11 +119,20 @@ final class ServerService {
         long before = Files.isRegularFile(log) ? Files.size(log) : 0;
         List<String> feedback = Collections.synchronizedList(new ArrayList<>());
         final String cmd = command;
+        String[] rejected = {null};
         boolean dispatched = plugin.sync(() -> {
             CommandSender sender = asConsole
                     ? Bukkit.getConsoleSender()
                     : Bukkit.createCommandSender(c -> feedback.add(PLAIN.serialize(c)));
-            return Bukkit.dispatchCommand(sender, cmd);
+            try {
+                return Bukkit.dispatchCommand(sender, cmd);
+            } catch (org.bukkit.command.CommandException e) {
+                // e.g. an unknown game rule: the server throws instead of answering; one line is enough, no stack trace.
+                Throwable root = e;
+                while (root.getCause() != null) root = root.getCause();
+                rejected[0] = root.getMessage() == null ? root.getClass().getSimpleName() : root.getMessage();
+                return false;
+            }
         });
         if (waitMs > 0) Thread.sleep(waitMs);
         Map<String, Object> m = new LinkedHashMap<>();
@@ -131,7 +140,12 @@ final class ServerService {
         m.put("dispatched", dispatched);
         m.put("feedback", new ArrayList<>(feedback));
         m.put("log", readAppended(log, before, 256 * 1024));
-        if (!dispatched) m.put("note", "the command does not exist or reported failure");
+        if (rejected[0] != null) {
+            m.put("error", "the server rejected the command: " + rejected[0]);
+            plugin.getLogger().info("API console command rejected: /" + command + " (" + rejected[0] + ")");
+        } else if (!dispatched) {
+            m.put("note", "the command does not exist or reported failure");
+        }
         return m;
     }
 

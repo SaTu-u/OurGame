@@ -201,13 +201,16 @@ final class TunnelManager {
      */
     private void logServiceLine(SshSession st, String line, LhrEvent ev) {
         String type = ev == null || ev.type() == null ? "" : ev.type().toLowerCase(Locale.ROOT);
-        if (type.endsWith("throttled")) {
+        String lowerLine = line.toLowerCase(Locale.ROOT);
+        boolean speedLimit = type.endsWith("throttled")
+                || (type.endsWith("notice") && (lowerLine.contains("burst") || lowerLine.contains("free tier")));
+        if (speedLimit) {
             throttledSinceNote++;
             long now = System.currentTimeMillis();
             if (lastThrottleNote == 0 || now - lastThrottleNote > 30 * 60_000L) {
                 plugin.getLogger().warning("Tunnel: localhost.run is slowing this tunnel (free plan speed limit"
                         + (throttledSinceNote > 1 ? ", " + throttledSinceNote + " notices since the last report" : "")
-                        + "): " + readable(line).replaceFirst("^tunnel\\.throttled \\S+: ", "")
+                        + "): " + readable(line).replaceFirst("^tunnel\\.(throttled|notice) \\S+: ", "")
                         + ". Large API transfers are slow; small requests still work. Further notices are summarised every 30 min.");
                 lastThrottleNote = now;
                 throttledSinceNote = 0;

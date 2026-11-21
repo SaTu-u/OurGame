@@ -5,7 +5,7 @@
 > (например, форму секретов вашего агента), не вставляйте его в чат.
 
 You are connected to a Minecraft Java Edition server (Purpur/Paper **26.2**) through the **ClaudeBridge** plugin
-(version 1.4.6 or later). The plugin exposes a JSON-over-HTTPS API that lets you:
+(version 1.4.7 or later). The plugin exposes a JSON-over-HTTPS API that lets you:
 
 1. **Administer the server**: run console commands, read logs, inspect plugins, browse files, query databases (read-only),
    and, only if the owner enabled it, change files (every change keeps a backup).
@@ -180,7 +180,12 @@ Runs a console command (leading `/` optional) with console permissions. `feedbac
 {"command":"list","dispatched":true,"feedback":["There are 0 of a max of 20 players online: "],"log":[]}
 {"command":"time set day","dispatched":true,"feedback":["Set minecraft:overworld to time marker minecraft:day"],"log":[]}
 {"command":"nosuchcommand","dispatched":false,"feedback":[],"log":[],"note":"the command does not exist or reported failure"}
+{"command":"gamerule spawn_radius","dispatched":false,"feedback":[],"log":[],"error":"the server rejected the command: Incorrect argument for command at position 9: gamerule <--[HERE]"}
 ```
+`error` means the server could not parse the command (wrong name or arguments): fix it before retrying.
+Some command names are taken over by plugins (EssentialsX answers `/time`, `/kill`, `/give`…); use the
+`minecraft:` prefix for the vanilla command (`minecraft:time set day`). Game rules in 26.2 use snake_case names
+(`respawn_radius`, `reduced_debug_info`).
 Plugin self-management: `claudebridge status` (answers in Russian) shows the API, avatar and tunnel state;
 `claudebridge reload` re-reads the config and restarts the API about 2 s after answering (retry requests that fail
 in the next 2–3 s). Never run `claudebridge off`: you would lock yourself out until an admin runs `on`.
@@ -188,15 +193,15 @@ in the next 2–3 s). Never run `claudebridge off`: you would lock yourself out 
 #### `GET /api/logs?file=latest.log&lines=200&grep=text` and `GET /api/logs/list`
 Tail of a file in `logs/` (`lines` 1–5000, case-insensitive `grep`, `.gz` archives work).
 ```json
-{"file":"latest.log","lines":["[20:49:04] [Server thread/INFO]: [ClaudeBridge] Enabling ClaudeBridge v1.4.6", …]}
+{"file":"latest.log","lines":["[20:49:04] [Server thread/INFO]: [ClaudeBridge] Enabling ClaudeBridge v1.4.7", …]}
 {"files":[{"file":"latest.log","size":8425,"modified":"2026-11-20T20:49:09.759Z"},{"file":"2026-11-17-16.log.gz", …}]}
 ```
 
 #### `GET /api/plugins` and `GET /api/plugins/info?name=X`
 ```json
-{"plugins":[{"name":"ClaudeBridge","version":"1.4.6","enabled":true,"description":"…","authors":["Claude"],"website":null,
+{"plugins":[{"name":"ClaudeBridge","version":"1.4.7","enabled":true,"description":"…","authors":["Claude"],"website":null,
  "main":"dev.claudebridge.ClaudeBridgePlugin","apiVersion":"26.2","depend":[],"softDepend":[],
- "dataFolder":"plugins/ClaudeBridge","jar":"plugins/ClaudeBridge-1.4.6.jar"}, …]}
+ "dataFolder":"plugins/ClaudeBridge","jar":"plugins/ClaudeBridge-1.4.7.jar"}, …]}
 ```
 `plugins/info` returns one plugin plus `dataFiles` (the files in its data folder).
 
