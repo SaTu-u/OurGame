@@ -35,7 +35,9 @@ record Settings(
         int chatterMinutes,
         List<String> phrases,
         List<String> clickPhrases,
-        boolean debug) {
+        boolean debug,
+        int callCooldown,
+        boolean keepDugBlocks) {
 
     static Settings load(FileConfiguration c, Logger log) {
         Key texture;
@@ -48,7 +50,7 @@ record Settings(
         PlayerTextures.SkinModel model = "wide".equalsIgnoreCase(c.getString("skin.model", "slim"))
                 ? PlayerTextures.SkinModel.CLASSIC : PlayerTextures.SkinModel.SLIM;
         Key fallback = null;
-        String fb = c.getString("skin.fallback", "minecraft:entity/player/slim/kai");
+        String fb = c.getString("skin.fallback", "minecraft:entity/player/slim/noor");
         if (fb != null && !fb.isBlank()) {
             try {
                 fallback = Key.key(fb.trim());
@@ -84,6 +86,8 @@ record Settings(
                 Math.max(0, c.getInt("chatter-minutes", 5)),
                 c.getStringList("phrases"),
                 c.getStringList("click-phrases"),
-                c.getBoolean("debug", false));
+                c.getBoolean("debug", false),
+                Math.max(0, c.getInt("call-cooldown-seconds", 30)),
+                c.getBoolean("keep-dug-blocks", false));
     }
 }

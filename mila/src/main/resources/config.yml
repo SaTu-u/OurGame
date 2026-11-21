@@ -10,7 +10,9 @@ name: 'Мила'
 skin:
   texture: 'mila:entity/mila'
   model: slim
-  fallback: 'minecraft:entity/player/slim/kai'
+  fallback: 'minecraft:entity/player/slim/noor'
+
+call-cooldown-seconds: 30   # /mila can make her appear (or teleport to you) once per this many seconds
 
 walk-speed: 4.6          # blocks per second (a walking player does 4.3, a sprinting one 5.6)
 run-speed: 6.2           # when she is far behind, fighting or coming for a hug
@@ -65,5 +67,9 @@ click-phrases:
   - 'Хи-хи ❤'
   - 'Звал меня?'
   - 'Пойдём куда-нибудь?'
+
+# Work (/mila mine, chop, farm, hunt, guard, fish...): she uses the tools, weapons and fishing rods in her backpack,
+# breaks blocks as her owner (claim plugins can forbid it) and digs only through natural terrain.
+keep-dug-blocks: false   # keep the stone/dirt she digs through on her way (false: only the resource she was sent for)
 
 debug: false             # log fights and clicks to the console

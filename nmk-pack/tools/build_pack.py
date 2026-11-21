@@ -51,15 +51,13 @@ def files():
 def main():
     tex_dir = os.path.join(BUILD, 'textures')
     subprocess.run([sys.executable, os.path.join(HERE, 'draw_textures.py'), tex_dir], check=True)
-    skin_dir = os.path.join(BUILD, 'skin')
-    subprocess.run([sys.executable, os.path.join(HERE, 'draw_skin.py'), skin_dir], check=True)
     os.makedirs(DIST, exist_ok=True)
     zpath = os.path.join(DIST, 'NMK-pack.zip')
     entries = files()
     for _, (tex, _, _) in FAMILIES.items():
         entries[f'assets/nmk/textures/item/{tex}.png'] = open(os.path.join(tex_dir, tex + '.png'), 'rb').read()
     # Mila's skin: the plugin's mannequin points its profile texture at mila:entity/mila
-    entries['assets/mila/textures/entity/mila.png'] = open(os.path.join(skin_dir, 'mila.png'), 'rb').read()
+    entries['assets/mila/textures/entity/mila.png'] = open(os.path.join(ROOT, 'skins', 'mila.png'), 'rb').read()
     # pack icon: the four bottles side by side, scaled to 128x128
     from PIL import Image
     icon = Image.new('RGBA', (64, 64), (0, 0, 0, 0))

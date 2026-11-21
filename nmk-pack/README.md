@@ -9,7 +9,7 @@ Turns four potions into milk-cocktail bottles with new names:
 | Swiftness (incl. long/strong) | Кофейный НМК | coffee |
 | Invisibility (incl. long) | Карамельный НМК | caramel |
 
-The pack also carries the skin of Mila, the companion from `../mila` (`assets/mila/textures/entity/mila.png`, drawn by `tools/draw_skin.py`).
+The pack also carries the skin of Mila, the companion from `../mila` (`assets/mila/textures/entity/mila.png`, from `skins/mila.png`).
 
 Only drinkable potions change. Splash and lingering potions, tipped arrows and every other potion keep the vanilla look.
 Works with Minecraft 26.2 (pack format 88) to 26.3 (format 97).

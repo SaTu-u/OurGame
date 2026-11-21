@@ -7,13 +7,17 @@ import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.format.TextColor;
 import org.bukkit.Bukkit;
 import org.bukkit.NamespacedKey;
+import org.bukkit.Location;
+import org.bukkit.Material;
 import org.bukkit.World;
+import org.bukkit.block.Block;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.PluginCommand;
 import org.bukkit.command.TabExecutor;
 import org.bukkit.entity.Enemy;
 import org.bukkit.entity.Entity;
+import org.bukkit.entity.EntityType;
 import org.bukkit.entity.Mannequin;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.Projectile;
@@ -52,13 +56,19 @@ import java.util.logging.Level;
 public final class MilaPlugin extends JavaPlugin implements Listener, TabExecutor {
 
     static final TextColor PINK = TextColor.color(0xFF7EB6);
-    private static final List<String> SUBCOMMANDS = List.of("follow", "stay", "hug", "kiss", "gift", "bag", "info", "name", "bye", "help");
+    private static final List<String> SUBCOMMANDS = List.of("help", "follow", "stay", "stop", "chest", "mine", "chop", "farm",
+            "hunt", "guard", "fish", "collect", "deposit", "fetch", "light", "give", "bag", "gift", "hug", "kiss", "info", "name", "bye");
     private static final Map<String, String> ALIASES = Map.ofEntries(
             Map.entry("позвать", "call"), Map.entry("иди", "follow"), Map.entry("следуй", "follow"),
             Map.entry("жди", "stay"), Map.entry("стой", "stay"), Map.entry("обнять", "hug"),
             Map.entry("поцеловать", "kiss"), Map.entry("подарок", "gift"), Map.entry("подарить", "gift"),
             Map.entry("рюкзак", "bag"), Map.entry("инфо", "info"), Map.entry("имя", "name"),
-            Map.entry("пока", "bye"), Map.entry("помощь", "help"));
+            Map.entry("пока", "bye"), Map.entry("помощь", "help"), Map.entry("стоп", "stop"),
+            Map.entry("сундук", "chest"), Map.entry("копать", "mine"), Map.entry("добыть", "mine"),
+            Map.entry("рубить", "chop"), Map.entry("ферма", "farm"), Map.entry("охота", "hunt"),
+            Map.entry("охранять", "guard"), Map.entry("рыбачить", "fish"), Map.entry("рыбалка", "fish"),
+            Map.entry("собрать", "collect"), Map.entry("выложить", "deposit"), Map.entry("принести", "fetch"),
+            Map.entry("свет", "light"), Map.entry("дать", "give"), Map.entry("отдать", "give"), Map.entry("факелы", "light"), Map.entry("ресурсы", "resources"));
 
     private final Map<UUID, Companion> companions = new HashMap<>();
     private NamespacedKey ownerKey;
@@ -248,39 +258,258 @@ public final class MilaPlugin extends JavaPlugin implements Listener, TabExecuto
                 else c.rename(p, String.join(" ", List.of(args).subList(1, args.length)));
             }
             case "bye" -> c.dismiss(p);
+            case "stop" -> {
+                if (c.task == null) Companion.hint(p, c.name + " сейчас ничем не занята.");
+                else {
+                    c.endTask(null, null);
+                    c.say(p, "Хорошо, остановилась.");
+                }
+            }
+            case "chest" -> {
+                Block b = Companion.lookedAtChest(p);
+                if (b == null) Companion.hint(p, "Посмотри на сундук (или бочку), который можно открыть, и повтори /mila chest.");
+                else {
+                    c.chest = b.getLocation();
+                    c.save();
+                    c.say(p, "Запомнила этот сундук! Буду носить добычу сюда.");
+                }
+            }
+            case "resources" -> p.sendMessage(resourcesLine());
+            case "light" -> c.toggleLight(p);
+            case "give" -> c.giveHeld(p);
+            case "mine", "chop", "farm", "hunt", "guard", "fish", "collect", "deposit", "fetch" -> work(p, c, sub, args);
             default -> help(p, c);
         }
         return true;
     }
 
+    private static int number(String[] args, int i, int def) {
+        if (args.length <= i) return def;
+        try {
+            return Math.max(1, Math.min(1000, Integer.parseInt(args[i])));
+        } catch (NumberFormatException e) {
+            return -1;
+        }
+    }
+
+    private Component resourcesLine() {
+        StringBuilder sb = new StringBuilder();
+        for (Resources.Resource r : Resources.ALL) {
+            if (sb.length() > 0) sb.append(", ");
+            sb.append(r.id()).append(" (").append(r.label()).append(")");
+        }
+        return Component.text("Что можно добывать: ", PINK).append(Component.text(sb.toString(), NamedTextColor.GRAY));
+    }
+
+    /** Starts a job. Each one checks what it needs (a chest, tools in her bag) and explains what is missing. */
+    private void work(Player p, Companion c, String sub, String[] args) {
+        if (!c.requireOut(p)) return;
+        if (!c.entity.getWorld().equals(p.getWorld()) || c.entity.getLocation().distance(p.getLocation()) > 32) {
+            Companion.hint(p, c.name + " далеко. Позови её (/mila) и дай задание рядом с ней.");
+            return;
+        }
+        switch (sub) {
+            case "mine" -> {
+                if (args.length < 2) {
+                    Companion.hint(p, "Например: /mila mine iron 20  (что копать, сколько штук)");
+                    p.sendMessage(resourcesLine());
+                    return;
+                }
+                Resources.Resource r = Resources.find(args[1]);
+                int n = number(args, 2, 16);
+                if (r == null || n < 0) {
+                    Companion.hint(p, "Не знаю такого ресурса. Пример: /mila mine iron 20");
+                    p.sendMessage(resourcesLine());
+                    return;
+                }
+                if (r.needsPickaxe() && c.count(it -> it.getType().name().endsWith("_PICKAXE")) == 0) {
+                    c.say(p, "Мне нужна кирка! Положи её в мой рюкзак: /mila bag");
+                    return;
+                }
+                Location chest = c.workChest(p, true);
+                if (chest == null) return;
+                c.startTask(p, new MineTask(c, "добывает " + r.label(), r.label(), r.genitive(), r.blocks(), n, chest, false));
+            }
+            case "chop" -> {
+                int n = number(args, 1, 16);
+                if (n < 0) {
+                    Companion.hint(p, "Например: /mila chop 32");
+                    return;
+                }
+                Location chest = c.workChest(p, true);
+                if (chest == null) return;
+                if (c.count(it -> it.getType().name().endsWith("_AXE")) == 0) Companion.hint(p, "С топором в рюкзаке она рубит быстрее.");
+                c.startTask(p, new MineTask(c, "рубит деревья", "дерево", "деревьев", Resources.logs(), n, chest, true));
+            }
+            case "farm" -> {
+                int radius = Math.min(24, number(args, 1, 12));
+                if (radius < 0) {
+                    Companion.hint(p, "Например: /mila farm 12  (радиус фермы вокруг неё)");
+                    return;
+                }
+                Location chest = c.workChest(p, true);
+                if (chest == null) return;
+                c.startTask(p, new FarmTask(c, radius, chest));
+            }
+            case "hunt" -> {
+                EntityType type = null;
+                int amountArg = 1;
+                if (args.length >= 2 && !args[1].matches("\\d+")) {
+                    String name = args[1].toLowerCase(Locale.ROOT);
+                    if (!name.equals("monsters") && !name.equals("монстры") && !name.equals("мобы")) {
+                        type = HuntTask.NAMES.get(name);
+                        if (type == null) {
+                            try {
+                                type = EntityType.valueOf(name.toUpperCase(Locale.ROOT));
+                            } catch (IllegalArgumentException ignored) {
+                            }
+                        }
+                        if (type == null || !(HuntTask.GAME.contains(type) || (type.getEntityClass() != null
+                                && org.bukkit.entity.Enemy.class.isAssignableFrom(type.getEntityClass())))) {
+                            Companion.hint(p, "На кого охотиться: monsters (монстры), корова, свинья, курица, овца, кролик, зомби, скелет, паук…");
+                            return;
+                        }
+                    }
+                    amountArg = 2;
+                }
+                int n = number(args, amountArg, 5);
+                if (n < 0) {
+                    Companion.hint(p, "Например: /mila hunt корова 3");
+                    return;
+                }
+                Location chest = c.workChest(p, false);
+                c.startTask(p, new HuntTask(c, "охотится на " + HuntTask.typeName(type), type, n, chest, false, 24));
+            }
+            case "guard" -> {
+                int radius = Math.min(24, number(args, 1, 12));
+                if (radius < 0) {
+                    Companion.hint(p, "Например: /mila guard 12");
+                    return;
+                }
+                c.startTask(p, new HuntTask(c, "охраняет", null, Integer.MAX_VALUE, null, true, radius));
+            }
+            case "fish" -> {
+                int n = number(args, 1, 10);
+                if (n < 0) {
+                    Companion.hint(p, "Например: /mila fish 10");
+                    return;
+                }
+                if (c.count(it -> it.getType() == Material.FISHING_ROD) == 0) {
+                    c.say(p, "Мне нужна удочка! Положи её в мой рюкзак: /mila bag");
+                    return;
+                }
+                c.startTask(p, new FishTask(c, n, c.workChest(p, false)));
+            }
+            case "collect" -> c.startTask(p, new Chores.Collect(c, Math.min(24, Math.max(4, number(args, 1, 12)))));
+            case "deposit" -> {
+                if (c.count(it -> !Mining.isEquipment(it)) == 0) {
+                    Companion.hint(p, "В рюкзаке нечего выкладывать.");
+                    return;
+                }
+                Location chest = c.workChest(p, true);
+                if (chest != null) c.startTask(p, new Chores.Deposit(c, chest));
+            }
+            case "fetch" -> {
+                if (args.length < 2) {
+                    Companion.hint(p, "Например: /mila fetch iron_ingot 16  (что принести из сундука и сколько)");
+                    return;
+                }
+                Material m = Material.matchMaterial(args[1]);
+                int n = number(args, 2, 1);
+                if (m == null || !m.isItem() || n < 0) {
+                    Companion.hint(p, "Не знаю такого предмета. Пиши как в игре: iron_ingot, bread, oak_log…");
+                    return;
+                }
+                Location chest = c.workChest(p, true);
+                if (chest != null) c.startTask(p, new Chores.Fetch(c, chest, m, n));
+            }
+            default -> {
+            }
+        }
+    }
+
+    /** Every command with a short description; a click puts the command into the chat line. */
     private void help(Player p, Companion c) {
-        p.sendMessage(Component.text(c.name + " — твоя подруга", PINK));
+        p.sendMessage(Component.text("━━ " + c.name + ": все команды ━━", PINK));
         String[][] lines = {
-                {"/mila", "позвать её (или позвать к себе)"},
+                {"#", "Основное"},
+                {"/mila", "позвать её (раз в " + settings.callCooldown() + " с)"},
                 {"/mila follow", "ходить за тобой"},
                 {"/mila stay", "ждать на месте"},
+                {"/mila stop", "бросить текущее дело"},
+                {"/mila bag", "рюкзак на " + Companion.BAG_SIZE + " слотов: инструменты, удочка, факелы (или Shift+ПКМ)"},
+                {"/mila give", "отдать ей то, что в руке (кирку, меч, удочку, факелы)"},
+                {"/mila info", "отношения, текущее дело, сундук"},
+                {"/mila bye", "отпустить отдыхать"},
+                {"#", "Работа (добыча несёт в сундук, на который ты смотришь)"},
+                {"/mila chest", "запомнить сундук, на который смотришь"},
+                {"/mila mine <ресурс> [кол-во]", "копать: iron, coal, diamond… (/mila resources)"},
+                {"/mila chop [кол-во]", "рубить деревья и сажать саженцы"},
+                {"/mila farm [радиус]", "собирать урожай, сажать заново, засеивать грядки"},
+                {"/mila hunt [моб] [кол-во]", "охотиться: monsters, корова, свинья…"},
+                {"/mila guard [радиус]", "охранять это место от монстров"},
+                {"/mila fish [кол-во]", "рыбачить (нужна удочка)"},
+                {"/mila collect [радиус]", "собрать валяющиеся предметы"},
+                {"/mila deposit", "выложить рюкзак в сундук"},
+                {"/mila fetch <предмет> [кол-во]", "принести предмет из сундука"},
+                {"/mila light", "ставить факелы в тёмных местах (вкл/выкл)"},
+                {"#", "Вместе"},
+                {"/mila gift", "подарить то, что в руке"},
                 {"/mila hug", "обнять (отношения от " + settings.hugAt() + ")"},
-                {"/mila kiss", "поцеловать в щёчку (отношения от " + settings.kissAt() + ")"},
-                {"/mila gift", "подарить то, что в руке: цветы, сладости, НМК, торт…"},
-                {"/mila bag", "её рюкзак на " + Companion.BAG_SIZE + " слотов (или Shift + ПКМ по ней)"},
-                {"/mila info", "отношения и подарки"},
+                {"/mila kiss", "поцеловать в щёчку (от " + settings.kissAt() + ")"},
                 {"/mila name <имя>", "переименовать"},
-                {"/mila bye", "отпустить её отдыхать"},
         };
         for (String[] l : lines) {
-            p.sendMessage(Component.text(l[0], NamedTextColor.YELLOW).append(Component.text(" — " + l[1], NamedTextColor.GRAY)));
+            if (l[0].equals("#")) {
+                p.sendMessage(Component.text(l[1], NamedTextColor.GOLD));
+                continue;
+            }
+            String suggest = l[0].replaceAll(" [<\\[].*", " ").trim() + (l[0].contains(" <") || l[0].contains(" [") ? " " : "");
+            p.sendMessage(Component.text(l[0], NamedTextColor.YELLOW)
+                    .clickEvent(net.kyori.adventure.text.event.ClickEvent.suggestCommand(suggest))
+                    .hoverEvent(net.kyori.adventure.text.event.HoverEvent.showText(Component.text("Нажми, чтобы вставить команду")))
+                    .append(Component.text(" — " + l[1], NamedTextColor.GRAY)));
         }
-        p.sendMessage(Component.text("ПКМ по ней — поговорить или отдать подарок из руки. Она защищает тебя от монстров.", NamedTextColor.GRAY));
     }
 
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
-        if (args.length != 1) return List.of();
-        String prefix = args[0].toLowerCase(Locale.ROOT);
         List<String> out = new ArrayList<>();
-        for (String s : SUBCOMMANDS) if (s.startsWith(prefix)) out.add(s);
-        if (sender.hasPermission("mila.admin") && "reload".startsWith(prefix)) out.add("reload");
+        if (args.length == 1) {
+            String prefix = args[0].toLowerCase(Locale.ROOT);
+            for (String s : SUBCOMMANDS) if (s.startsWith(prefix)) out.add(s);
+            if ("resources".startsWith(prefix)) out.add("resources");
+            if (sender.hasPermission("mila.admin") && "reload".startsWith(prefix)) out.add("reload");
+            return out;
+        }
+        String sub = ALIASES.getOrDefault(args[0].toLowerCase(Locale.ROOT), args[0].toLowerCase(Locale.ROOT));
+        String prefix = args[args.length - 1].toLowerCase(Locale.ROOT);
+        if (args.length == 2 && sub.equals("mine")) {
+            for (Resources.Resource r : Resources.ALL) if (r.id().startsWith(prefix)) out.add(r.id());
+        } else if (args.length == 2 && sub.equals("hunt")) {
+            for (String s : List.of("monsters", "cow", "pig", "chicken", "sheep", "rabbit", "zombie", "skeleton", "spider")) {
+                if (s.startsWith(prefix)) out.add(s);
+            }
+        } else if (args.length == 2 && sub.equals("fetch")) {
+            for (Material m : Material.values()) {
+                if (m.isItem() && !m.isLegacy() && m.getKey().getKey().startsWith(prefix)) out.add(m.getKey().getKey());
+                if (out.size() > 40) break;
+            }
+        }
         return out;
+    }
+
+    /** Monsters and animals she killed while hunting or guarding drop into her bag. */
+    @EventHandler(priority = EventPriority.HIGH)
+    public void onKill(EntityDeathEvent event) {
+        if (isCompanion(event.getEntity())) return;
+        if (!(event.getEntity().getLastDamageCause() instanceof EntityDamageByEntityEvent by) || !isCompanion(by.getDamager())) return;
+        Companion c = companionOf(by.getDamager());
+        if (c == null || !(c.task instanceof HuntTask hunt)) return;
+        List<org.bukkit.inventory.ItemStack> left = c.addToBag(event.getDrops());
+        event.getDrops().clear();
+        event.getDrops().addAll(left);
+        hunt.killed(event.getEntity());
     }
 
     // ------------------------------------------------------------------ players

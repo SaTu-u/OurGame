@@ -14,8 +14,13 @@ import org.bukkit.SoundCategory;
 import org.bukkit.Tag;
 import org.bukkit.World;
 import org.bukkit.block.Block;
+import org.bukkit.block.BlockState;
+import org.bukkit.block.Container;
+import org.bukkit.block.data.BlockData;
 import org.bukkit.block.data.Openable;
 import org.bukkit.configuration.file.YamlConfiguration;
+import org.bukkit.event.block.BlockBreakEvent;
+import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.entity.Creeper;
 import org.bukkit.entity.Enemy;
 import org.bukkit.entity.Entity;
@@ -25,6 +30,7 @@ import org.bukkit.entity.Mannequin;
 import org.bukkit.entity.Mob;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.Inventory;
+import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.PotionMeta;
@@ -38,6 +44,9 @@ import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.function.Predicate;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
@@ -102,6 +111,14 @@ final class Companion {
     private final Map<UUID, Long> unreachable = new HashMap<>();
     private final Map<Block, Long> openedDoors = new HashMap<>();
 
+    // work
+    Task task;
+    final Navigator nav = new Navigator(this);
+    Location chest;                       // remembered with /mila chest
+    boolean light;                        // puts torches down in the dark
+    private long lastCallAt;              // System.currentTimeMillis() of the last summon, for the cooldown
+    private final Set<Long> tickets = new HashSet<>();
+
     /** Marks the bag inventory as hers, so the close event can find the owner. */
     static final class BagHolder implements InventoryHolder {
         final Companion companion;
@@ -155,6 +172,12 @@ final class Companion {
         giftsToday = y.getInt("gifts-today", 0);
         List<String> items = y.getStringList("bag");
         for (int i = 0; i < Math.min(items.size(), BAG_SIZE); i++) bag.setItem(i, decode(items.get(i)));
+        light = y.getBoolean("light", false);
+        lastCallAt = y.getLong("last-call", 0);
+        if (y.isConfigurationSection("chest")) {
+            World w = Bukkit.getWorld(y.getString("chest.world", ""));
+            if (w != null) chest = new Location(w, y.getInt("chest.x"), y.getInt("chest.y"), y.getInt("chest.z"));
+        }
     }
 
     void save() {
@@ -178,6 +201,14 @@ final class Companion {
         List<String> items = new ArrayList<>();
         for (int i = 0; i < BAG_SIZE; i++) items.add(encode(bag.getItem(i)));
         y.set("bag", items);
+        y.set("light", light);
+        y.set("last-call", lastCallAt);
+        if (chest != null && chest.getWorld() != null) {
+            y.set("chest.world", chest.getWorld().getName());
+            y.set("chest.x", chest.getBlockX());
+            y.set("chest.y", chest.getBlockY());
+            y.set("chest.z", chest.getBlockZ());
+        }
         try {
             y.save(file);
         } catch (IOException e) {
@@ -213,7 +244,7 @@ final class Companion {
     Mannequin twin;
 
     void spawnEntity(Location loc) {
-        despawnEntity();
+        removeBodies();
         // With the fallback skin on, nobody sees a body until applyVisibility picks the right one for each player.
         entity = spawnBody(loc, plugin.profile(), plugin.fallbackProfile() == null);
         updateLook();
@@ -233,7 +264,7 @@ final class Companion {
             m.setVisibleByDefault(visibleByDefault);
             m.customName(Component.text(name, MilaPlugin.PINK));
             m.setCustomNameVisible(true);
-            m.setDescription(Component.text("подруга " + ownerName, NamedTextColor.GRAY));
+            m.setDescription(tag());
             m.setProfile(profile);
             m.setPersistent(false);
             m.setRemoveWhenFarAway(false);
@@ -243,6 +274,17 @@ final class Companion {
             m.setImmovable(true);
             m.getPersistentDataContainer().set(key, PersistentDataType.STRING, owner.toString());
         });
+    }
+
+    /** The line under her name: whose companion she is, and what she is doing. */
+    Component tag() {
+        Component c = Component.text(ownerName, NamedTextColor.GOLD);
+        return task == null ? c : c.append(Component.text(" · " + task.title, NamedTextColor.GRAY));
+    }
+
+    void updateTag() {
+        if (isSpawned()) entity.setDescription(tag());
+        if (twin != null && twin.isValid()) twin.setDescription(tag());
     }
 
     /** True for both of her entities. */
@@ -276,7 +318,7 @@ final class Companion {
         twin = null;
     }
 
-    private void swing() {
+    void swing() {
         entity.swingMainHand();
         if (twin != null && twin.isValid()) twin.swingMainHand();
     }
@@ -301,8 +343,16 @@ final class Companion {
         }
     }
 
+    /** Takes her out of the world (owner left, /mila bye, server stop); any job she was doing ends. */
     void despawnEntity() {
+        if (task != null) endTask(null, null);
+        removeBodies();
+    }
+
+    private void removeBodies() {
         closeAllDoors();
+        cancelBreak();
+        removeTickets();
         if (entity != null && entity.isValid()) entity.remove();
         removeTwin();
         entity = null;
@@ -329,7 +379,23 @@ final class Companion {
         p.sendMessage(speech(text));
     }
 
-    private static void hint(Player p, String text) {
+    /** Speech made of text and item names; item names reach each player in their own game language. */
+    void say(Player p, Object... parts) {
+        Component c = Component.empty();
+        for (Object o : parts) c = c.append(o instanceof Component comp ? comp : Component.text(String.valueOf(o).replace("{player}", ownerName)));
+        p.sendMessage(Component.text()
+                .append(Component.text("<", NamedTextColor.GRAY))
+                .append(Component.text(name, MilaPlugin.PINK))
+                .append(Component.text("> ", NamedTextColor.GRAY))
+                .append(c.colorIfAbsent(NamedTextColor.WHITE))
+                .build());
+    }
+
+    static Component item(Material m) {
+        return Component.translatable(m.translationKey());
+    }
+
+    static void hint(Player p, String text) {
         p.sendMessage(Component.text(text, NamedTextColor.GRAY));
     }
 
@@ -342,7 +408,7 @@ final class Companion {
         }
     }
 
-    private void sound(String key, float volume, float pitch) {
+    void sound(String key, float volume, float pitch) {
         if (isSpawned()) entity.getWorld().playSound(entity.getLocation(), key, SoundCategory.NEUTRAL, volume, pitch);
     }
 
@@ -350,7 +416,7 @@ final class Companion {
         at.getWorld().spawnParticle(Particle.HEART, at, count, 0.35, 0.25, 0.35, 0);
     }
 
-    private void poof() {
+    void poof() {
         if (!isSpawned()) return;
         Location l = entity.getLocation().add(0, 1, 0);
         l.getWorld().spawnParticle(Particle.CLOUD, l, 12, 0.3, 0.5, 0.3, 0.02);
@@ -369,6 +435,15 @@ final class Companion {
             return;
         }
         boolean first = !met;
+        boolean needsMagic = !isSpawned() || !entity.getWorld().equals(p.getWorld())
+                || entity.getLocation().distance(p.getLocation()) > s().teleportDistance();
+        long wait = lastCallAt + s().callCooldown() * 1000L - System.currentTimeMillis();
+        if (needsMagic && wait > 0 && !p.hasPermission("mila.nocooldown")) {
+            hint(p, name + " ещё не может появиться. Позвать можно через " + (wait + 999) / 1000 + " с.");
+            return;
+        }
+        if (task != null) endTask(p, "позвали к себе");
+        if (needsMagic) lastCallAt = System.currentTimeMillis();
         mode = Mode.FOLLOW;
         pending = null;
         if (!isSpawned()) {
@@ -556,6 +631,14 @@ final class Companion {
                 .append(Component.text(" " + affection + "/100, " + relation(), NamedTextColor.GRAY)));
         String where = !out ? "отдыхает (позвать: /mila)" : mode == Mode.STAY ? "ждёт на месте" : "ходит за тобой";
         hint(p, "Сейчас: " + where);
+        if (task != null) {
+            String pr = task.progress();
+            hint(p, "Занята: " + task.title + (pr.isEmpty() ? "" : " (" + pr + ")") + ". Остановить: /mila stop");
+        }
+        String chestText = chest == null || chest.getWorld() == null ? "не выбран (/mila chest)"
+                : !chest.getWorld().equals(p.getWorld()) ? "в другом мире"
+                : "в " + (int) chest.distance(p.getLocation()) + " блоках от тебя";
+        hint(p, "Сундук для добычи: " + chestText + ". Факелы: " + (light ? "ставит" : "выкл") + ".");
         hint(p, "Подарков сегодня: " + gifts + "/" + s().giftsPerDay());
         hint(p, "Обнять: от " + s().hugAt() + ", поцеловать: от " + s().kissAt()
                 + ". Отношения растут, когда вы гуляете вместе (+1 за " + s().minutesPerPoint() + " мин) и от подарков.");
@@ -574,7 +657,7 @@ final class Companion {
         save();
     }
 
-    private boolean requireOut(Player p) {
+    boolean requireOut(Player p) {
         if (isSpawned()) return true;
         hint(p, out ? name + " сейчас далеко. Позови её: /mila" : name + " сейчас не с тобой. Позови её: /mila");
         return false;
@@ -704,11 +787,8 @@ final class Companion {
 
     void tick(Player p, long now) {
         if (entity != null && !entity.isValid()) {
-            closeAllDoors();
-            removeTwin();
-            entity = null;
-            pending = null;
-            fightTarget = null;
+            if (task != null) endTask(p, "я потерялась");
+            removeBodies();
         }
         if (!out) return;
         if (entity == null) {
@@ -724,6 +804,17 @@ final class Companion {
 
         if (ownerAway) {
             pending = null;
+        } else if (task != null) {
+            boolean done;
+            try {
+                done = task.tick(p, now);
+            } catch (RuntimeException ex) {
+                plugin.getLogger().log(Level.WARNING, "Task " + task.title + " failed", ex);
+                say(p, "Ой, что-то пошло не так, я остановилась.");
+                done = true;
+            }
+            if (done && task != null) endTask(p, null);
+            if (now % 20 == 0) updateTickets();
         } else if (pending != null) {
             pendingTick(p, dist, now);
         } else if (mode == Mode.FOLLOW) {
@@ -750,6 +841,7 @@ final class Companion {
             }
         }
         if (isSpawned() && !movedThisTick) applyGravity();
+        if (light && isSpawned() && now % 10 == 0) placeTorch(p);
         syncTwin();
         if (now % 10 == 0) unstickIfBuried();
         closeDoorsBehind(now);
@@ -974,7 +1066,12 @@ final class Companion {
     }
 
     private void step(Location cur, double speedPerSecond) {
-        int[] w = path.get(idx);
+        if (moveStep(path.get(idx), speedPerSecond)) idx++;
+    }
+
+    /** One tick toward the centre of a path node; true when she is there. */
+    boolean moveStep(int[] w, double speedPerSecond) {
+        Location cur = entity.getLocation();
         double tx = w[0] + 0.5;
         double ty = w[1];
         double tz = w[2] + 0.5;
@@ -1002,10 +1099,10 @@ final class Companion {
         entity.setVelocity(new Vector());
         movedThisTick = true;
         fallVelocity = 0;
-        if (horiz <= speed && Math.abs(ny - ty) < 0.01) idx++;
+        return horiz <= speed && Math.abs(ny - ty) < 0.01;
     }
 
-    private void face(Location target) {
+    void face(Location target) {
         if (!isSpawned()) return;
         Location eye = entity.getEyeLocation();
         double dx = target.getX() - eye.getX();
@@ -1108,5 +1205,359 @@ final class Companion {
             b.getWorld().playSound(b.getLocation(), Tag.FENCE_GATES.isTagged(m) ? "minecraft:block.fence_gate.close" : "minecraft:block.wooden_door.close",
                     SoundCategory.BLOCKS, 0.8f, 1.0f);
         }
+    }
+
+    // ------------------------------------------------------------------ work (tasks)
+
+    MilaPlugin plugin() {
+        return plugin;
+    }
+
+    Settings settings() {
+        return s();
+    }
+
+    void startTask(Player p, Task t) {
+        if (task != null) endTask(null, null);
+        pending = null;
+        fightTarget = null;
+        mode = Mode.FOLLOW;
+        task = t;
+        nav.reset();
+        updateTag();
+        updateTickets();
+        say(p, t.startMessage());
+    }
+
+    /** Ends the current job; a reason is told to the owner (null = quietly or the task already said it). */
+    void endTask(Player p, String reason) {
+        Task t = task;
+        task = null;
+        if (t != null) t.stopped();
+        nav.reset();
+        cancelBreak();
+        removeTickets();
+        updateTag();
+        updateLook();
+        if (p != null && reason != null && t != null) say(p, "Я больше не " + t.title + ": " + reason + ".");
+    }
+
+    /** Keeps the chunks around her loaded while she works, even when her owner walks away. */
+    private void updateTickets() {
+        if (!isSpawned()) return;
+        World w = entity.getWorld();
+        int cx = entity.getLocation().getBlockX() >> 4;
+        int cz = entity.getLocation().getBlockZ() >> 4;
+        Set<Long> want = new HashSet<>();
+        for (int dx = -1; dx <= 1; dx++) for (int dz = -1; dz <= 1; dz++) want.add(chunkKey(cx + dx, cz + dz));
+        for (Long k : want) if (!tickets.contains(k)) w.addPluginChunkTicket((int) (k >> 32), (int) (long) k, plugin);
+        for (Long k : tickets) if (!want.contains(k)) w.removePluginChunkTicket((int) (k >> 32), (int) (long) k, plugin);
+        tickets.clear();
+        tickets.addAll(want);
+        ticketWorld = w;
+    }
+
+    private World ticketWorld;
+
+    private void removeTickets() {
+        if (ticketWorld != null) for (Long k : tickets) ticketWorld.removePluginChunkTicket((int) (k >> 32), (int) (long) k, plugin);
+        tickets.clear();
+    }
+
+    private static long chunkKey(int x, int z) {
+        return ((long) x << 32) | (z & 0xFFFFFFFFL);
+    }
+
+    /** Shows an item in her hand (both bodies). */
+    void hold(ItemStack it) {
+        if (!isSpawned()) return;
+        entity.getEquipment().setItemInMainHand(it);
+        if (twin != null && twin.isValid()) twin.getEquipment().setItemInMainHand(it);
+    }
+
+    // ------------------------------------------------------------------ breaking blocks
+
+    static final int BUSY = 0, DONE = 1, FAILED = 2;
+
+    private Block breakBlock;
+    private Material breakType;
+    private int breakProgress;
+    private int breakTotal;
+    /** What the last finished break gave (already in the bag when it was kept). */
+    List<ItemStack> lastDrops = List.of();
+    /** Blocks a protection plugin did not let her owner break. */
+    final Set<Block> forbidden = new HashSet<>();
+
+    /**
+     * One tick of breaking a block with the best tool from her bag. When done, the break is announced to the other
+     * plugins as her owner's (claims, logs), the drops go into her bag (keep=true) and the tool wears down.
+     */
+    int breakTick(Player owner, Block b, boolean keep) {
+        if (!b.equals(breakBlock)) {
+            cancelBreak();
+            if (b.getType().isAir() || b.isLiquid()) return DONE;
+            int slot = Mining.bestTool(bag, b);
+            ItemStack tool = slot < 0 ? null : bag.getItem(slot);
+            int ticks = Mining.breakTicks(b, tool);
+            if (ticks < 0) return FAILED;
+            breakBlock = b;
+            breakType = b.getType();
+            breakTotal = ticks;
+            breakProgress = 0;
+            hold(tool == null ? null : tool.clone());
+        }
+        if (b.getType() != breakType) {
+            boolean gone = b.getType().isAir();
+            cancelBreak();
+            return gone ? DONE : FAILED;
+        }
+        breakProgress++;
+        face(b.getLocation().add(0.5, 0.5, 0.5));
+        if (breakProgress % 5 == 1) swing();
+        sendCrack(b, Math.min(0.99f, breakProgress / (float) breakTotal));
+        if (breakProgress < breakTotal) return BUSY;
+        sendCrack(b, 0f);
+        breakBlock = null;
+        int slot = Mining.bestTool(bag, b);
+        ItemStack tool = slot < 0 ? null : bag.getItem(slot);
+        BlockBreakEvent ev = new BlockBreakEvent(b, owner);
+        Bukkit.getPluginManager().callEvent(ev);
+        if (ev.isCancelled()) {
+            forbidden.add(b);
+            return FAILED;
+        }
+        List<ItemStack> drops = new ArrayList<>();
+        if (ev.isDropItems() && Mining.canHarvest(b, tool)) drops.addAll(b.getDrops(tool == null ? ItemStack.empty() : tool, entity));
+        BlockData data = b.getBlockData();
+        Location center = b.getLocation().add(0.5, 0.5, 0.5);
+        b.setType(Material.AIR, true);
+        b.getWorld().spawnParticle(Particle.BLOCK, center, 24, 0.3, 0.3, 0.3, 0, data);
+        b.getWorld().playSound(center, data.getSoundGroup().getBreakSound(), SoundCategory.BLOCKS, 1f, 0.8f);
+        if (ev.getExpToDrop() > 0 && owner.isOnline()) owner.giveExp(ev.getExpToDrop());
+        if (slot >= 0 && Mining.isTool(tool) && !Mining.damage(bag, slot)) {
+            say(owner, "Ой, сломалось: ", item(tool.getType()), "!");
+            sound("minecraft:entity.item.break", 1f, 1f);
+        }
+        if (keep) {
+            List<ItemStack> left = addToBag(drops);
+            for (ItemStack l : left) b.getWorld().dropItemNaturally(center, l);
+        }
+        lastDrops = drops;
+        return DONE;
+    }
+
+    void cancelBreak() {
+        if (breakBlock != null) sendCrack(breakBlock, 0f);
+        breakBlock = null;
+    }
+
+    boolean breaking() {
+        return breakBlock != null;
+    }
+
+    private void sendCrack(Block b, float progress) {
+        Location l = b.getLocation();
+        for (Player q : l.getWorld().getPlayers()) {
+            if (q.getLocation().distanceSquared(l) < 48 * 48) q.sendBlockDamage(l, progress, entity);
+        }
+    }
+
+    /** Puts a block down as her owner would: other plugins can refuse (claims). True when it stayed. */
+    boolean place(Player owner, Block where, Block against, Material type) {
+        BlockState before = where.getState();
+        where.setType(type, true);
+        BlockPlaceEvent ev = new BlockPlaceEvent(where, before, against, new ItemStack(type), owner, true, EquipmentSlot.HAND);
+        Bukkit.getPluginManager().callEvent(ev);
+        if (ev.isCancelled() || !ev.canBuild()) {
+            before.update(true, false);
+            return false;
+        }
+        where.getWorld().playSound(where.getLocation(), where.getBlockData().getSoundGroup().getPlaceSound(), SoundCategory.BLOCKS, 1f, 1f);
+        return true;
+    }
+
+    // ------------------------------------------------------------------ the backpack
+
+    /** Adds items to her bag; returns what did not fit. */
+    List<ItemStack> addToBag(Iterable<ItemStack> items) {
+        List<ItemStack> left = new ArrayList<>();
+        for (ItemStack it : items) {
+            if (it == null || it.getType().isAir()) continue;
+            left.addAll(bag.addItem(it.clone()).values());
+        }
+        return left;
+    }
+
+    int freeSlots() {
+        int n = 0;
+        for (ItemStack it : bag.getStorageContents()) if (it == null || it.getType().isAir()) n++;
+        return n;
+    }
+
+    int count(Predicate<ItemStack> what) {
+        int n = 0;
+        for (ItemStack it : bag.getStorageContents()) if (it != null && what.test(it)) n += it.getAmount();
+        return n;
+    }
+
+    /** Removes up to n matching items from her bag and returns them. */
+    List<ItemStack> take(Predicate<ItemStack> what, int n) {
+        List<ItemStack> out = new ArrayList<>();
+        for (int i = 0; i < bag.getSize() && n > 0; i++) {
+            ItemStack it = bag.getItem(i);
+            if (it == null || !what.test(it)) continue;
+            int k = Math.min(n, it.getAmount());
+            ItemStack part = it.clone();
+            part.setAmount(k);
+            out.add(part);
+            n -= k;
+            if (k >= it.getAmount()) bag.setItem(i, null);
+            else {
+                it.setAmount(it.getAmount() - k);
+                bag.setItem(i, it);
+            }
+        }
+        return out;
+    }
+
+    /** Pulls loose items lying within a radius into the bag (not ones other players threw away). */
+    int pickUp(double radius, Predicate<ItemStack> what) {
+        if (!isSpawned()) return 0;
+        int got = 0;
+        for (org.bukkit.entity.Item item : entity.getLocation().getNearbyEntitiesByType(org.bukkit.entity.Item.class, radius)) {
+            UUID thrower = item.getThrower();
+            if (thrower != null && !thrower.equals(owner)) continue;
+            if (item.getPickupDelay() > 0 && item.getTicksLived() < 10) continue;
+            ItemStack st = item.getItemStack();
+            if (!what.test(st)) continue;
+            Map<Integer, ItemStack> left = bag.addItem(st.clone());
+            int taken = st.getAmount() - left.values().stream().mapToInt(ItemStack::getAmount).sum();
+            if (taken <= 0) continue;
+            got += taken;
+            if (left.isEmpty()) item.remove();
+            else item.setItemStack(left.values().iterator().next());
+        }
+        if (got > 0) sound("minecraft:entity.item.pickup", 0.4f, 1.6f);
+        return got;
+    }
+
+    // ------------------------------------------------------------------ chests
+
+    /** The chest the player looks at, if they may open it (protection plugins are asked as if they clicked it). */
+    static Block lookedAtChest(Player p) {
+        Block b = p.getTargetBlockExact(6);
+        if (b == null || !(b.getState(false) instanceof Container)) return null;
+        org.bukkit.event.player.PlayerInteractEvent ev = new org.bukkit.event.player.PlayerInteractEvent(
+                p, org.bukkit.event.block.Action.RIGHT_CLICK_BLOCK, p.getInventory().getItemInMainHand(), b, org.bukkit.block.BlockFace.UP, EquipmentSlot.HAND);
+        Bukkit.getPluginManager().callEvent(ev);
+        if (ev.useInteractedBlock() == org.bukkit.event.Event.Result.DENY) return null;
+        return b;
+    }
+
+    /** The chest a job should use: the one looked at, else the remembered one. Tells the player when there is none. */
+    Location workChest(Player p, boolean required) {
+        Block looked = lookedAtChest(p);
+        if (looked != null) {
+            chest = looked.getLocation();
+            return chest;
+        }
+        if (chest != null && chest.getWorld() != null && chest.getBlock().getState(false) instanceof Container) return chest;
+        if (required) hint(p, "Посмотри на сундук, куда складывать добычу (или запомни его: /mila chest), и повтори команду.");
+        return null;
+    }
+
+    /** Opens the chest lid for a moment and moves the bag contents in, keeping what keep says. Returns what was stored. */
+    Map<Material, Integer> storeInto(Block chestBlock, Predicate<ItemStack> keep) {
+        Map<Material, Integer> stored = new java.util.LinkedHashMap<>();
+        if (!(chestBlock.getState(false) instanceof Container c)) return stored;
+        Inventory inv = c.getInventory();
+        for (int i = 0; i < bag.getSize(); i++) {
+            ItemStack it = bag.getItem(i);
+            if (it == null || it.getType().isAir() || keep.test(it)) continue;
+            Map<Integer, ItemStack> left = inv.addItem(it.clone());
+            int moved = it.getAmount() - left.values().stream().mapToInt(ItemStack::getAmount).sum();
+            if (moved > 0) stored.merge(it.getType(), moved, Integer::sum);
+            bag.setItem(i, left.isEmpty() ? null : left.values().iterator().next());
+        }
+        flashLid(chestBlock);
+        return stored;
+    }
+
+    void flashLid(Block chestBlock) {
+        if (chestBlock.getState(false) instanceof org.bukkit.block.Lidded lid) {
+            lid.open();
+            chestBlock.getWorld().playSound(chestBlock.getLocation(), "minecraft:block.chest.open", SoundCategory.BLOCKS, 0.6f, 1f);
+            Bukkit.getScheduler().runTaskLater(plugin, () -> {
+                if (chestBlock.getState(false) instanceof org.bukkit.block.Lidded l2) l2.close();
+                chestBlock.getWorld().playSound(chestBlock.getLocation(), "minecraft:block.chest.close", SoundCategory.BLOCKS, 0.6f, 1f);
+            }, 20L);
+        }
+    }
+
+    static Component summary(Map<Material, Integer> items) {
+        if (items.isEmpty()) return Component.text("ничего");
+        Component c = Component.empty();
+        int shown = 0;
+        for (Map.Entry<Material, Integer> e : items.entrySet()) {
+            if (shown == 6) {
+                c = c.append(Component.text(" и ещё " + (items.size() - 6) + " видов"));
+                break;
+            }
+            if (shown++ > 0) c = c.append(Component.text(", "));
+            c = c.append(item(e.getKey())).append(Component.text(" ×" + e.getValue()));
+        }
+        return c;
+    }
+
+    // ------------------------------------------------------------------ torches
+
+    /** In dark places with no sky above (caves, dark rooms) she puts a torch from her bag at her feet. */
+    private void placeTorch(Player p) {
+        Block feet = entity.getLocation().getBlock();
+        if (!feet.getType().isAir() || feet.getLightFromBlocks() >= 7 || feet.getLightFromSky() >= 8) return;
+        Block below = feet.getRelative(org.bukkit.block.BlockFace.DOWN);
+        if (!below.getType().isSolid() || !below.getType().isOccluding()) return;
+        if (count(it -> it.getType() == Material.TORCH) <= 0) {
+            if (plugin.tick() % 1200 == 0) hint(p, name + ": у меня кончились факелы.");
+            return;
+        }
+        if (place(p, feet, below, Material.TORCH)) take(it -> it.getType() == Material.TORCH, 1);
+    }
+
+    /** /mila give: the stack in the owner's hand goes into her backpack (a pickaxe, a rod, torches...). */
+    void giveHeld(Player p) {
+        if (!requireOut(p)) return;
+        ItemStack hand = p.getInventory().getItemInMainHand();
+        if (hand.getType().isAir()) {
+            hint(p, "Возьми в руку то, что хочешь ей отдать (кирку, топор, меч, удочку, факелы...).");
+            return;
+        }
+        if (!entity.getWorld().equals(p.getWorld()) || entity.getLocation().distance(p.getLocation()) > 8) {
+            hint(p, "Подойди к ней поближе.");
+            return;
+        }
+        List<ItemStack> left = addToBag(List.of(hand));
+        int kept = left.stream().mapToInt(ItemStack::getAmount).sum();
+        if (kept >= hand.getAmount()) {
+            say(p, "Рюкзак полон, мне некуда положить.");
+            return;
+        }
+        Component what = item(hand.getType());
+        p.getInventory().setItemInMainHand(left.isEmpty() ? null : left.get(0));
+        face(p.getEyeLocation());
+        sound("minecraft:entity.item.pickup", 0.6f, 1.2f);
+        say(p, "Взяла: ", what, "! Пригодится.");
+        save();
+    }
+
+    void toggleLight(Player p) {
+        light = !light;
+        if (light) {
+            say(p, "Буду ставить факелы, где темно!");
+            if (count(it -> it.getType() == Material.TORCH) == 0) hint(p, "Положи факелы в её рюкзак: /mila bag");
+        } else {
+            say(p, "Больше не ставлю факелы.");
+        }
+        save();
     }
 }
