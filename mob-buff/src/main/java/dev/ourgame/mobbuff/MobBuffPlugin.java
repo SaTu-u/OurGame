@@ -179,6 +179,11 @@ public final class MobBuffPlugin extends JavaPlugin implements Listener {
         for (World w : Bukkit.getWorlds()) {
             for (Mob m : w.getEntitiesByClass(Mob.class)) {
                 LivingEntity target = m.getTarget();
+                if (debug && now % 40 == 0 && targeted(m)) {
+                    getLogger().info(String.format(java.util.Locale.ROOT, "tick %d: %s target=%s melee=%s ai=%s aware=%s", now, m.getType(),
+                            target == null ? "none" : target.getType() + String.format(java.util.Locale.ROOT, " %.2f m", target.getLocation().distance(m.getLocation())),
+                            melee(m), m.hasAI(), m.isAware()));
+                }
                 if (target == null || !target.isValid() || target.isDead() || !target.getWorld().equals(w)) continue;
                 if (!targeted(m) || !melee(m) || !m.hasAI() || !m.isAware()) continue;
                 if (target instanceof Player p && (p.getGameMode() == GameMode.CREATIVE || p.getGameMode() == GameMode.SPECTATOR)) continue;
@@ -191,6 +196,7 @@ public final class MobBuffPlugin extends JavaPlugin implements Listener {
                 lastAttack.put(m.getUniqueId(), now);
                 m.swingMainHand();
                 m.attack(target);
+                if (debug) getLogger().info("tick " + now + ": extra hit by " + m.getType() + " on " + target.getType());
             }
         }
     }
