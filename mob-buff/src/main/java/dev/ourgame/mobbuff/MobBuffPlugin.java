@@ -161,6 +161,20 @@ public final class MobBuffPlugin extends JavaPlugin implements Listener {
                 || m instanceof Hoglin;
     }
 
+    private boolean ownHit;
+
+    /**
+     * Keeps one rhythm: the vanilla attack goal still hits every 20 ticks on its own timer, so a vanilla hit that comes
+     * sooner than the configured interval after the previous hit is cancelled (otherwise mobs would hit far more often).
+     */
+    @EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
+    public void onEarlyHit(EntityDamageByEntityEvent event) {
+        if (ownHit || !enabled || event.getCause() != EntityDamageEvent.DamageCause.ENTITY_ATTACK) return;
+        if (!(event.getDamager() instanceof Mob m) || !targeted(m) || !melee(m)) return;
+        Integer last = lastAttack.get(m.getUniqueId());
+        if (last != null && Bukkit.getCurrentTick() - last < interval) event.setCancelled(true);
+    }
+
     /** Remembers every melee hit (vanilla ones too) so the next extra hit waits the configured interval. */
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onHit(EntityDamageByEntityEvent event) {
@@ -193,9 +207,14 @@ public final class MobBuffPlugin extends JavaPlugin implements Listener {
                 BoundingBox attack = m.getBoundingBox().expand(reach, 0, reach);
                 if (!attack.overlaps(target.getBoundingBox())) continue;
                 if (!m.hasLineOfSight(target)) continue;
-                lastAttack.put(m.getUniqueId(), now);
                 m.swingMainHand();
-                m.attack(target);
+                ownHit = true;
+                try {
+                    m.attack(target);
+                } finally {
+                    ownHit = false;
+                }
+                lastAttack.put(m.getUniqueId(), now);
                 if (debug) getLogger().info("tick " + now + ": extra hit by " + m.getType() + " on " + target.getType());
             }
         }
