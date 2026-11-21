@@ -2,7 +2,7 @@ name: MobBuff
 version: '1.0.0'
 main: dev.ourgame.mobbuff.MobBuffPlugin
 api-version: '26.2'
-description: Makes hostile mobs a bit stronger: more health and damage, longer aggro range, longer and faster melee attacks
+description: 'Makes hostile mobs a bit stronger - more health and damage, longer aggro range, longer and faster melee attacks'
 authors: [Claude]
 commands:
   mobbuff:
